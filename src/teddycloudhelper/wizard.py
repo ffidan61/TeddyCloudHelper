@@ -305,9 +305,16 @@ def run() -> None:
             # unchanged, `up` leaves running containers alone and nginx keeps
             # serving the OLD config — force a restart.
             compose.restart()
-    ui.info_panel("Services started. TeddyCloud generates its server certs on "
-                  "first start — export certs/server/ca.der via the certificate "
-                  "menu afterwards to flash it onto the box.")
+    ui.info_panel(
+        "Services started.\n\n"
+        "On the FIRST start TeddyCloud generates its CA and server "
+        "certificates — RSA key generation can take several minutes on slow "
+        "hardware. Until it finishes, the WebUI answers '502 Bad Gateway'; "
+        "watch progress with the 'Show recent logs' action in the Docker "
+        "menu.\n\n"
+        "Afterwards, export certs/server/ca.der via the certificate menu to "
+        "flash it onto the box."
+    )
 
 
 def _any_running(compose: docker_cli.Compose) -> bool:
