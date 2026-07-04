@@ -43,6 +43,8 @@ class AppState:
     schema_version: int = SCHEMA_VERSION
     # "direct" (TeddyCloud exposes its ports itself) or "nginx" (reverse proxy).
     deployment_mode: str = "direct"
+    # Image channel: "latest" (stable) or "develop" (bleeding edge).
+    teddycloud_image_tag: str = "latest"
     # "shared" (WebUI and box share 443 via SNI split) or "separate" (own port).
     webui_port_mode: str = "separate"
     box_hostname: str = ""

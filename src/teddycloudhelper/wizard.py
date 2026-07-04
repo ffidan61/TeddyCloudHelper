@@ -38,6 +38,16 @@ def step_deployment_mode(state: AppState) -> None:
     )
 
 
+def step_image_tag(state: AppState) -> None:
+    state.teddycloud_image_tag = ui.menu(
+        "Which TeddyCloud image channel?",
+        [
+            ("latest — stable releases (recommended)", "latest"),
+            ("develop — newest features, may break", "develop"),
+        ],
+    )
+
+
 def step_webui(state: AppState) -> None:
     """nginx mode only: hostname + how the WebUI is reached."""
     hostname = ""
@@ -164,6 +174,7 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         raise ValueError("nginx mode needs a WebUI hostname — run the setup wizard.")
     context = {
         "deployment_mode": state.deployment_mode,
+        "teddycloud_image_tag": state.teddycloud_image_tag,
         "webui_port_mode": state.webui_port_mode,
         "webui_hostname": state.webui_hostname,
         "webui_port": state.webui_port,
@@ -198,6 +209,7 @@ def run() -> None:
         state = AppState()
 
     step_deployment_mode(state)
+    step_image_tag(state)
     le: tuple[str, str] | None = None
     if state.deployment_mode == "nginx":
         step_webui(state)

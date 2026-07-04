@@ -4,6 +4,7 @@ from teddycloudhelper import render
 
 DIRECT = {
     "deployment_mode": "direct",
+    "teddycloud_image_tag": "latest",
     "webui_port_mode": "separate",
     "webui_hostname": "tc.example.com",
     "webui_port": 8443,
@@ -46,6 +47,15 @@ def test_render_to_file_no_backup_on_first_write(tmp_path):
 
 
 # --- docker-compose.yml.j2 ----------------------------------------------------
+
+
+def test_compose_image_tag():
+    text = render.render_template("docker-compose.yml.j2", DIRECT)
+    assert "image: ghcr.io/toniebox-reverse-engineering/teddycloud:latest" in text
+    text = render.render_template(
+        "docker-compose.yml.j2", DIRECT | {"teddycloud_image_tag": "develop"}
+    )
+    assert "image: ghcr.io/toniebox-reverse-engineering/teddycloud:develop" in text
 
 
 def test_compose_direct_publishes_teddycloud_ports():

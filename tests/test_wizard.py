@@ -32,6 +32,13 @@ def test_step_deployment_mode(monkeypatch):
     assert state.deployment_mode == "nginx"
 
 
+def test_step_image_tag(monkeypatch):
+    state = AppState()
+    answer_menu(monkeypatch, "develop")
+    wizard.step_image_tag(state)
+    assert state.teddycloud_image_tag == "develop"
+
+
 def test_step_webui_separate_port(monkeypatch):
     state = AppState()
     answer_text(monkeypatch, "tc.home.arpa", "9443")
