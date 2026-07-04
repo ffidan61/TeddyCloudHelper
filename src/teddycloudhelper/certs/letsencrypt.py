@@ -7,9 +7,12 @@ How it fits together:
 
 * nginx (nginx mode) always serves ``/.well-known/acme-challenge/`` from the
   ``certbot-www`` volume, exempt from Basic Auth and the IP allowlist.
-* Once ``AppState.letsencrypt_email`` is set, the compose file gains a
+* Once ``AppState.letsencrypt_enabled`` is set, the compose file gains a
   certbot side-container that renews twice a day, and nginx reloads
-  periodically to pick up renewed certs.
+  periodically to pick up renewed certs. No email is registered with the
+  ACME account: Let's Encrypt no longer sends expiry notifications, so the
+  address would buy nothing — expiry monitoring is this tool's job
+  (:func:`renewal_warning`).
 * The first certificate is issued with a one-off
   ``docker compose run --rm certbot certonly …`` (see :func:`certonly_args`);
   afterwards ``AppState.webui_tls_mode`` flips to ``"letsencrypt"`` and the
@@ -61,23 +64,16 @@ def validate_hostname(hostname: str) -> str:
     return hostname
 
 
-def validate_email(email: str) -> str:
-    email = email.strip()
-    if "@" not in email or email.startswith("@") or email.endswith("@"):
-        raise CertError(f"{email!r} does not look like an email address.")
-    return email
-
-
-def certonly_args(hostname: str, email: str) -> list[str]:
+def certonly_args(hostname: str) -> list[str]:
     """certbot arguments for the initial webroot issuance (idempotent)."""
     return [
         "certonly",
         "--webroot",
         "--webroot-path", "/var/www/certbot",
         "--domain", hostname,
-        "--email", email,
+        # LE sends no expiry mails anymore, so an account email buys nothing.
+        "--register-unsafely-without-email",
         "--agree-tos",
-        "--no-eff-email",
         "--non-interactive",
         "--keep-until-expiring",
     ]

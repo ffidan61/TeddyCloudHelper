@@ -53,19 +53,14 @@ def test_validate_hostname_rejects(bad, match):
         letsencrypt.validate_hostname(bad)
 
 
-def test_validate_email():
-    assert letsencrypt.validate_email(" a@b.de ") == "a@b.de"
-    for bad in ("", "nope", "@b.de", "a@"):
-        with pytest.raises(CertError, match="email"):
-            letsencrypt.validate_email(bad)
-
-
 def test_certonly_args():
-    args = letsencrypt.certonly_args("tc.example.com", "a@b.de")
+    args = letsencrypt.certonly_args("tc.example.com")
     assert args[0] == "certonly"
     assert "--webroot" in args
     assert args[args.index("--domain") + 1] == "tc.example.com"
-    assert args[args.index("--email") + 1] == "a@b.de"
+    # LE sends no expiry mails anymore — no account email is registered
+    assert "--register-unsafely-without-email" in args
+    assert "--email" not in args
     assert "--non-interactive" in args
     assert "--agree-tos" in args
 

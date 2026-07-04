@@ -118,18 +118,13 @@ def _letsencrypt(project: Path) -> None:
         )
         return
     hostname = letsencrypt.validate_hostname(state.webui_hostname)
-    email = letsencrypt.validate_email(
-        ui.ask_text("Email for the Let's Encrypt account (recovery contact — "
-                    "LE no longer sends expiry emails):",
-                    default=state.letsencrypt_email)
-    )
     if not ui.confirm(
         f"Port 80 on {hostname} must be reachable from the internet for the "
         "HTTP-01 challenge. Is it?",
         default=False,
     ):
         return
-    wizard.setup_letsencrypt(project, state, hostname, email)
+    wizard.setup_letsencrypt(project, state, hostname)
 
 
 def _le_renew(project: Path) -> None:

@@ -65,16 +65,18 @@ def test_newer_schema_is_rejected(tmp_path):
 
 
 def test_migration_runs_and_writes_backup(tmp_path, monkeypatch):
-    monkeypatch.setattr(state, "SCHEMA_VERSION", 2)
+    monkeypatch.setattr(state, "SCHEMA_VERSION", state.SCHEMA_VERSION + 1)
     monkeypatch.setitem(
-        state.MIGRATIONS, 1, lambda data: data | {"deployment_mode": "nginx"}
+        state.MIGRATIONS,
+        state.SCHEMA_VERSION - 1,
+        lambda data: data | {"deployment_mode": "nginx"},
     )
-    old = state.AppState().to_dict()  # schema_version stays 1 in the file
+    old = state.AppState(schema_version=state.SCHEMA_VERSION - 1).to_dict()
     state.state_path(tmp_path).write_text(json.dumps(old))
 
     loaded = state.load_state(tmp_path)
 
-    assert loaded.schema_version == 2
+    assert loaded.schema_version == state.SCHEMA_VERSION
     assert loaded.deployment_mode == "nginx"
     backups = list(tmp_path.glob("teddycloudhelper.json.*.bak"))
     assert len(backups) == 1
@@ -82,10 +84,33 @@ def test_migration_runs_and_writes_backup(tmp_path, monkeypatch):
 
 
 def test_missing_migration_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(state, "SCHEMA_VERSION", 2)
-    state.state_path(tmp_path).write_text(json.dumps(state.AppState().to_dict()))
+    monkeypatch.setattr(state, "SCHEMA_VERSION", state.SCHEMA_VERSION + 1)
+    old = state.AppState(schema_version=state.SCHEMA_VERSION - 1).to_dict()
+    state.state_path(tmp_path).write_text(json.dumps(old))
     with pytest.raises(state.StateError, match="No migration registered"):
         state.load_state(tmp_path)
+
+
+def test_migration_v1_drops_email_for_flag(tmp_path):
+    v1 = state.AppState().to_dict()
+    del v1["letsencrypt_enabled"]
+    v1 |= {"schema_version": 1, "letsencrypt_email": "a@b.de"}
+    state.state_path(tmp_path).write_text(json.dumps(v1))
+
+    loaded = state.load_state(tmp_path)
+
+    assert loaded.schema_version == 2
+    assert loaded.letsencrypt_enabled is True
+    assert not hasattr(loaded, "letsencrypt_email")
+
+
+def test_migration_v1_without_email(tmp_path):
+    v1 = state.AppState().to_dict()
+    del v1["letsencrypt_enabled"]
+    v1 |= {"schema_version": 1, "letsencrypt_email": ""}
+    state.state_path(tmp_path).write_text(json.dumps(v1))
+
+    assert state.load_state(tmp_path).letsencrypt_enabled is False
 
 
 def test_last_project_pointer_roundtrip(tmp_path, monkeypatch):

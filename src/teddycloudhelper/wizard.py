@@ -134,10 +134,12 @@ def step_first_client_cert(state: AppState, project_dir: Path) -> None:
     )
 
 
-def step_letsencrypt(state: AppState) -> tuple[str, str] | None:
+def step_letsencrypt(state: AppState) -> str | None:
     """nginx mode: Let's Encrypt is the default when the hostname is public.
 
-    Returns (hostname, email) when the user wants LE, else None.
+    Returns the validated hostname when the user wants LE, else None.
+    No email is asked for — LE no longer sends expiry notifications, so
+    certbot registers without one and this tool does the expiry monitoring.
     """
     try:
         hostname = letsencrypt.validate_hostname(state.webui_hostname)
@@ -154,28 +156,17 @@ def step_letsencrypt(state: AppState) -> tuple[str, str] | None:
         default=True,
     ):
         return None
-    while True:
-        try:
-            email = letsencrypt.validate_email(
-                ui.ask_text(
-                    "Email for the Let's Encrypt account (recovery contact — "
-                    "LE no longer sends expiry emails):",
-                    default=state.letsencrypt_email,
-                )
-            )
-            return hostname, email
-        except CertError as exc:
-            ui.error_panel(str(exc))
+    return hostname
 
 
-def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: str) -> None:
+def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None:
     """Three-phase issuance; assumes the rendered project is ready to start.
 
     1. Enable the certbot service + ACME plumbing (nginx still self-signed).
     2. One-off ``certonly`` through the webroot nginx now serves.
-    3. Switch nginx to the issued cert and restart.
+    3. Verify the cert landed on disk, then switch nginx over and restart.
     """
-    state.letsencrypt_email = email
+    state.letsencrypt_enabled = True
     state_mod.save_state(state, project_dir)
     render_project(state, project_dir)
     compose = docker_cli.Compose(project_dir)
@@ -183,10 +174,21 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: 
 
     ui.console.print("Requesting the certificate from Let's Encrypt…")
     result = compose.run_service(
-        "certbot", *letsencrypt.certonly_args(hostname, email), entrypoint="certbot"
+        "certbot", *letsencrypt.certonly_args(hostname), entrypoint="certbot"
     )
     if result.stdout:
         ui.console.print(result.stdout.strip())
+
+    # Never point nginx at cert files that don't exist — it would refuse to
+    # start and take the box path down with it.
+    if not letsencrypt.cert_exists(project_dir, hostname):
+        raise CertError(
+            f"certbot finished but no certificate appeared in "
+            f"{letsencrypt.live_cert_dir(project_dir, hostname)}. The WebUI "
+            "stays on the self-signed certificate. Check the output above "
+            "and `docker compose logs certbot`, make sure port 80 is "
+            "reachable from the internet, then retry via the certificate menu."
+        )
 
     state.webui_tls_mode = "letsencrypt"
     state_mod.save_state(state, project_dir)
@@ -221,7 +223,7 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         "basic_auth_enabled": state.basic_auth_enabled,
         "ip_allowlist": state.ip_allowlist,
         "webui_tls_mode": state.webui_tls_mode,
-        "letsencrypt_email": state.letsencrypt_email,
+        "letsencrypt_enabled": state.letsencrypt_enabled,
     }
     rendered = [
         render.render_to_file(
@@ -248,7 +250,7 @@ def run() -> None:
 
     step_deployment_mode(state)
     step_image_tag(state)
-    le: tuple[str, str] | None = None
+    le: str | None = None
     if state.deployment_mode == "nginx":
         step_webui(state)
         step_webui_auth(state, project_dir)
@@ -273,7 +275,7 @@ def run() -> None:
     if not project_menu.confirm_required_ports(project_dir):
         return
     if le is not None:
-        setup_letsencrypt(project_dir, state, *le)
+        setup_letsencrypt(project_dir, state, le)
     else:
         compose = docker_cli.Compose(project_dir)
         was_running = _any_running(compose)

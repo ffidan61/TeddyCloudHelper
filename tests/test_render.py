@@ -13,7 +13,7 @@ DIRECT = {
     "basic_auth_enabled": False,
     "ip_allowlist": [],
     "webui_tls_mode": "selfsigned",
-    "letsencrypt_email": "",
+    "letsencrypt_enabled": False,
 }
 NGINX_SEPARATE = DIRECT | {"deployment_mode": "nginx"}
 NGINX_SHARED = NGINX_SEPARATE | {"webui_port_mode": "shared"}
@@ -186,13 +186,13 @@ def test_nginx_selfsigned_cert_paths_by_default():
     assert "letsencrypt" not in text
 
 
-def test_compose_certbot_only_with_email():
+def test_compose_certbot_only_when_enabled():
     text = render.render_template("docker-compose.yml.j2", NGINX_SEPARATE)
     assert "image: certbot/certbot" not in text
     assert "letsencrypt" not in text
     assert "- ./certbot-www:/var/www/certbot:ro" in text  # webroot mount is always there
 
-    context = NGINX_SEPARATE | {"letsencrypt_email": "a@b.de"}
+    context = NGINX_SEPARATE | {"letsencrypt_enabled": True}
     text = render.render_template("docker-compose.yml.j2", context)
     assert "image: certbot/certbot" in text
     assert "certbot renew" in text

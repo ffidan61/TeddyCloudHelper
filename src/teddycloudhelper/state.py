@@ -25,11 +25,19 @@ from pathlib import Path
 
 from platformdirs import user_config_dir
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATE_FILENAME = "teddycloudhelper.json"
 
+
+def _migrate_1_to_2(data: dict) -> dict:
+    """v2 drops letsencrypt_email (LE sends no mails; certbot registers
+    without one) in favour of a plain letsencrypt_enabled flag."""
+    data["letsencrypt_enabled"] = bool(data.pop("letsencrypt_email", ""))
+    return data
+
+
 # Migration i transforms a raw dict from schema_version i to i+1.
-MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _migrate_1_to_2}
 
 
 class StateError(Exception):
@@ -55,8 +63,8 @@ class AppState:
     webui_client_cert_auth: bool = False
     # "selfsigned" (webui-pki/server/) or "letsencrypt" (certbot-managed).
     webui_tls_mode: str = "selfsigned"
-    # Non-empty enables the certbot side-container in the compose file.
-    letsencrypt_email: str = ""
+    # Enables the certbot side-container in the compose file.
+    letsencrypt_enabled: bool = False
     basic_auth_enabled: bool = False
     ip_allowlist: list[str] = field(default_factory=list)
     # Monotone serial counter for issued client certificates.

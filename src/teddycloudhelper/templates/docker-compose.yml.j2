@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     depends_on:
       - teddycloud
-{%- if letsencrypt_email %}
+{%- if letsencrypt_enabled %}
     # Reload periodically so renewed Let's Encrypt certs are picked up.
     command: /bin/sh -c 'while :; do sleep 6h & wait $$!; nginx -s reload; done & exec nginx -g "daemon off;"'
 {%- endif %}
@@ -40,7 +40,7 @@ services:
 {%- if basic_auth_enabled %}
       - ./security:/etc/teddycloudhelper/security:ro
 {%- endif %}
-{%- if letsencrypt_email %}
+{%- if letsencrypt_enabled %}
       - ./letsencrypt:/etc/letsencrypt:ro
 
   certbot:
