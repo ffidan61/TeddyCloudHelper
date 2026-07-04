@@ -125,9 +125,20 @@ class Compose:
             args.append("--volumes")
         self._run(*args)
 
-    def run_service(self, service: str, *args: str) -> subprocess.CompletedProcess:
-        """One-off ``compose run --rm <service> <args…>`` (e.g. certbot certonly)."""
-        return self._run("run", "--rm", service, *args)
+    def run_service(
+        self, service: str, *args: str, entrypoint: str | None = None
+    ) -> subprocess.CompletedProcess:
+        """One-off ``compose run --rm <service> <args…>``.
+
+        ``entrypoint`` overrides the service's entrypoint — essential when the
+        service defines a long-running loop as its entrypoint (like our
+        certbot renewer): without the override, compose would run that loop
+        and ignore *args* entirely, hanging forever.
+        """
+        run_args = ["run", "--rm"]
+        if entrypoint is not None:
+            run_args += ["--entrypoint", entrypoint]
+        return self._run(*run_args, service, *args)
 
     def logs(self, tail: int = 100) -> str:
         result = self._run("logs", "--no-color", "--tail", str(tail))

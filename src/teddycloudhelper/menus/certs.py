@@ -137,7 +137,9 @@ def _le_renew(project: Path) -> None:
         ui.info_panel("Let's Encrypt is not set up for this project.")
         return
     compose = docker_cli.Compose(project)
-    result = compose.run_service("certbot", "renew", "--webroot", "-w", "/var/www/certbot")
+    result = compose.run_service(
+        "certbot", "renew", "--webroot", "-w", "/var/www/certbot", entrypoint="certbot"
+    )
     ui.console.print(result.stdout or "")
     compose.restart()
     ui.info_panel("Renewal attempted and nginx restarted.")

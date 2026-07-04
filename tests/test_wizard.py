@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from teddycloudhelper import docker_cli, ui, wizard
@@ -163,8 +165,9 @@ class FakeCompose:
     def up(self):
         FakeCompose.calls.append(("up",))
 
-    def run_service(self, service, *args):
-        FakeCompose.calls.append(("run", service, *args))
+    def run_service(self, service, *args, entrypoint=None):
+        FakeCompose.calls.append(("run", service, entrypoint, *args))
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
 
 def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
@@ -178,6 +181,7 @@ def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
     # phase 1: up with certbot plumbing, then certonly, then up again
     assert FakeCompose.calls[0] == ("up",)
     assert FakeCompose.calls[1][:2] == ("run", "certbot")
+    assert FakeCompose.calls[1][2] == "certbot"  # entrypoint override, or it hangs
     assert "certonly" in FakeCompose.calls[1]
     assert "tc.example.com" in FakeCompose.calls[1]
     assert FakeCompose.calls[2] == ("up",)

@@ -127,6 +127,20 @@ def test_run_service_builds_args(tmp_path):
     ]
 
 
+def test_run_service_with_entrypoint_override(tmp_path):
+    # Needed for services whose entrypoint is a long-running loop (certbot
+    # renewer): without the override the loop runs and the args are ignored.
+    compose, runner = make_compose(tmp_path)
+    compose.run_service("certbot", "certonly", entrypoint="certbot")
+    assert runner.calls == [
+        (
+            ["docker", "compose", "run", "--rm", "--entrypoint", "certbot",
+             "certbot", "certonly"],
+            tmp_path,
+        )
+    ]
+
+
 def test_logs_returns_stdout(tmp_path):
     compose, runner = make_compose(tmp_path, completed(stdout="line1\nline2\n"))
     assert compose.logs(tail=50) == "line1\nline2\n"

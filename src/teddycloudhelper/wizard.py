@@ -140,7 +140,11 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: 
     compose.up()
 
     ui.console.print("Requesting the certificate from Let's Encrypt…")
-    compose.run_service("certbot", *letsencrypt.certonly_args(hostname, email))
+    result = compose.run_service(
+        "certbot", *letsencrypt.certonly_args(hostname, email), entrypoint="certbot"
+    )
+    if result.stdout:
+        ui.console.print(result.stdout.strip())
 
     state.webui_tls_mode = "letsencrypt"
     state_mod.save_state(state, project_dir)
