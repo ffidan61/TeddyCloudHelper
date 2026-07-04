@@ -158,7 +158,8 @@ def step_letsencrypt(state: AppState) -> tuple[str, str] | None:
         try:
             email = letsencrypt.validate_email(
                 ui.ask_text(
-                    "Email for Let's Encrypt (expiry notices):",
+                    "Email for the Let's Encrypt account (recovery contact — "
+                    "LE no longer sends expiry emails):",
                     default=state.letsencrypt_email,
                 )
             )
@@ -197,7 +198,10 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: 
     ui.info_panel(
         f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
         "Renewal runs automatically twice a day (certbot side-container); "
-        "nginx reloads every 6 hours to pick up renewed certs.",
+        "nginx reloads every 6 hours to pick up renewed certs.\n\n"
+        "Note: Let's Encrypt no longer sends expiry emails — this tool "
+        "checks the certificate on every start and warns when fewer than "
+        f"{letsencrypt.RENEWAL_WARN_DAYS} days remain.",
         title="Let's Encrypt active",
     )
 

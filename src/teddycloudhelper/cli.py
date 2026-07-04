@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 from rich.panel import Panel
 
 from teddycloudhelper import __version__, ui, wizard
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.certs import letsencrypt
+from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import backup as backup_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
@@ -35,6 +38,17 @@ def preflight() -> list[str]:
             "The 'docker compose' plugin is missing. Install Docker Compose v2."
         )
     return warnings
+
+
+def _warn_expiring_cert(project: Path) -> None:
+    """LE sends no expiry emails anymore — the startup check is the notice."""
+    try:
+        state = state_mod.load_state(project)
+        warning = letsencrypt.renewal_warning(project, state)
+    except (state_mod.StateError, CertError):
+        return  # startup must never break over this
+    if warning:
+        ui.error_panel(warning, title="Certificate warning")
 
 
 MENU_ACTIONS: list[tuple[str, str]] = [
@@ -79,6 +93,7 @@ def main() -> int:
     last_project = state_mod.load_last_project()
     if last_project is not None:
         console.print(f"Last used project: [bold]{last_project}[/bold]")
+        _warn_expiring_cert(last_project)
 
     while True:
         try:

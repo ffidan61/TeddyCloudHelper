@@ -1,7 +1,16 @@
 import pytest
 
-from teddycloudhelper.certs import letsencrypt
+from teddycloudhelper.certs import ca, letsencrypt
 from teddycloudhelper.certs.ca import CertError
+from teddycloudhelper.state import AppState
+
+
+def write_le_cert(tmp_path, hostname, days):
+    """Plant a cert with the given remaining validity at the LE live path."""
+    ca.create_ca(tmp_path, days=days)
+    live = letsencrypt.live_cert_dir(tmp_path, hostname)
+    live.mkdir(parents=True)
+    (live / "fullchain.pem").write_bytes(ca.ca_cert_path(tmp_path).read_bytes())
 
 
 def test_validate_hostname_accepts_public_names():
@@ -49,3 +58,55 @@ def test_cert_exists(tmp_path):
     live.mkdir(parents=True)
     (live / "fullchain.pem").write_text("pem")
     assert letsencrypt.cert_exists(tmp_path, "tc.example.com")
+
+
+# --- expiry monitoring (LE sends no expiry emails anymore) ---------------------
+
+
+def le_state():
+    return AppState(webui_tls_mode="letsencrypt", webui_hostname="tc.example.com")
+
+
+def test_cert_expiry_none_without_cert(tmp_path):
+    assert letsencrypt.cert_expiry(tmp_path, "tc.example.com") is None
+
+
+def test_cert_expiry_reads_leaf(tmp_path):
+    write_le_cert(tmp_path, "tc.example.com", days=90)
+    expiry = letsencrypt.cert_expiry(tmp_path, "tc.example.com")
+    assert expiry is not None
+    assert (expiry - ca.utcnow()).days in (89, 90)
+
+
+def test_cert_expiry_garbage_raises(tmp_path):
+    live = letsencrypt.live_cert_dir(tmp_path, "tc.example.com")
+    live.mkdir(parents=True)
+    (live / "fullchain.pem").write_text("garbage")
+    with pytest.raises(CertError, match="not a valid PEM"):
+        letsencrypt.cert_expiry(tmp_path, "tc.example.com")
+
+
+def test_renewal_warning_not_in_le_mode(tmp_path):
+    assert letsencrypt.renewal_warning(tmp_path, AppState()) is None
+
+
+def test_renewal_warning_missing_cert(tmp_path):
+    warning = letsencrypt.renewal_warning(tmp_path, le_state())
+    assert warning is not None and "no certificate was found" in warning
+
+
+def test_renewal_warning_healthy_cert(tmp_path):
+    write_le_cert(tmp_path, "tc.example.com", days=60)
+    assert letsencrypt.renewal_warning(tmp_path, le_state()) is None
+
+
+def test_renewal_warning_expiring_cert(tmp_path):
+    write_le_cert(tmp_path, "tc.example.com", days=10)
+    warning = letsencrypt.renewal_warning(tmp_path, le_state())
+    assert warning is not None and "renewal seems to be failing" in warning
+
+
+def test_renewal_warning_expired_cert(tmp_path):
+    write_le_cert(tmp_path, "tc.example.com", days=-2)
+    warning = letsencrypt.renewal_warning(tmp_path, le_state())
+    assert warning is not None and "EXPIRED" in warning

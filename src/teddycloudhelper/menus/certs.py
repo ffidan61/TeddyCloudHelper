@@ -119,7 +119,8 @@ def _letsencrypt(project: Path) -> None:
         return
     hostname = letsencrypt.validate_hostname(state.webui_hostname)
     email = letsencrypt.validate_email(
-        ui.ask_text("Email for Let's Encrypt (expiry notices):",
+        ui.ask_text("Email for the Let's Encrypt account (recovery contact — "
+                    "LE no longer sends expiry emails):",
                     default=state.letsencrypt_email)
     )
     if not ui.confirm(
@@ -190,11 +191,30 @@ _HANDLERS = {
 }
 
 
+def _show_le_status(project: Path) -> None:
+    """LE no longer emails expiry notices — show cert health in the menu."""
+    try:
+        state = state_mod.load_state(project)
+        warning = letsencrypt.renewal_warning(project, state)
+    except (state_mod.StateError, CertError):
+        return
+    if warning:
+        ui.error_panel(warning, title="Certificate warning")
+    elif state.webui_tls_mode == "letsencrypt":
+        expiry = letsencrypt.cert_expiry(project, state.webui_hostname)
+        if expiry is not None:
+            ui.console.print(
+                f"Let's Encrypt certificate for [bold]{state.webui_hostname}[/bold] "
+                f"is valid until [green]{expiry:%Y-%m-%d}[/green] (auto-renewal active)."
+            )
+
+
 def run() -> None:
     """Submenu loop. Mirrors the main loop: errors render red and never crash."""
     project = project_menu.active_project()
     if project is None:
         return
+    _show_le_status(project)
     while True:
         ui.console.print(f"Active project: [bold]{project}[/bold]")
         try:
