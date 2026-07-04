@@ -6,7 +6,7 @@ import subprocess
 
 from rich.panel import Panel
 
-from teddycloudhelper import __version__, ui
+from teddycloudhelper import __version__, ui, wizard
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
@@ -57,7 +57,7 @@ def _dispatch(action: str) -> bool:
     if action == "quit":
         return False
     if action == "wizard":
-        _placeholder("The setup wizard", "v0.4")
+        wizard.run()
     elif action == "docker":
         docker_menu.run()
     elif action == "certs":

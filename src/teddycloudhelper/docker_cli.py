@@ -104,7 +104,9 @@ class Compose:
         return _parse_ps_output(self._run("ps", "--all", "--format", "json").stdout)
 
     def up(self) -> None:
-        self._run("up", "--detach")
+        # --remove-orphans: reconfiguring can drop services (e.g. nginx when
+        # switching to direct mode); their old containers must not linger.
+        self._run("up", "--detach", "--remove-orphans")
 
     def stop(self) -> None:
         self._run("stop")

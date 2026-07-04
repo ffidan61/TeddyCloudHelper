@@ -31,6 +31,20 @@ def test_webui_cert_empty_hostname_raises(tmp_path):
         server_certs.create_webui_server_cert(tmp_path, "  ")
 
 
+def test_webui_cert_matches(tmp_path):
+    assert not server_certs.webui_cert_matches(tmp_path, "tc.example.com")  # none yet
+    server_certs.create_webui_server_cert(tmp_path, "tc.example.com")
+    assert server_certs.webui_cert_matches(tmp_path, "tc.example.com")
+    assert server_certs.webui_cert_matches(tmp_path, " tc.example.com ")  # whitespace ok
+    assert not server_certs.webui_cert_matches(tmp_path, "other.example.com")  # stale
+
+
+def test_webui_cert_matches_ip(tmp_path):
+    server_certs.create_webui_server_cert(tmp_path, "192.168.1.10")
+    assert server_certs.webui_cert_matches(tmp_path, "192.168.1.10")
+    assert not server_certs.webui_cert_matches(tmp_path, "192.168.1.11")
+
+
 def make_box_ca_der(tmp_path):
     """Write a valid DER cert at the teddycloud ca.der location."""
     ca.create_ca(tmp_path)  # reuse our CA machinery to get any valid cert

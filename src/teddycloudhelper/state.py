@@ -49,6 +49,8 @@ class AppState:
     webui_hostname: str = ""
     webui_port: int = 8443
     http_port: int = 80
+    # Require browser client certs (own CA, mTLS at nginx) for the WebUI.
+    webui_client_cert_auth: bool = False
     basic_auth_enabled: bool = False
     ip_allowlist: list[str] = field(default_factory=list)
     # Monotone serial counter for issued client certificates.

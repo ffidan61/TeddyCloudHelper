@@ -93,7 +93,7 @@ def test_failure_without_output(tmp_path):
 @pytest.mark.parametrize(
     ("method", "expected_args"),
     [
-        ("up", ["up", "--detach"]),
+        ("up", ["up", "--detach", "--remove-orphans"]),
         ("stop", ["stop"]),
         ("restart", ["restart"]),
         ("pull", ["pull"]),

@@ -65,6 +65,22 @@ def create_webui_server_cert(
     return cert_path
 
 
+def webui_cert_matches(project_dir: Path, hostname: str) -> bool:
+    """True if an existing WebUI cert covers *hostname*; False if none/stale."""
+    path = server_dir(project_dir) / "server.crt"
+    try:
+        cert = x509.load_pem_x509_certificate(path.read_bytes())
+    except (FileNotFoundError, ValueError):
+        return False
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return False
+    names = set(san.get_values_for_type(x509.DNSName))
+    names.update(str(ip) for ip in san.get_values_for_type(x509.IPAddress))
+    return hostname.strip() in names
+
+
 # --- box CA export ------------------------------------------------------------
 
 

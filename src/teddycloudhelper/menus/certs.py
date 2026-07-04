@@ -38,6 +38,13 @@ def _create_ca(project: Path) -> None:
 
 def _issue(project: Path) -> None:
     name = ui.ask_text("Name for this certificate (e.g. the user or device):")
+    existing = {info.name: info for info in client_certs.list_client_certs(project)}
+    if name in existing and not ui.confirm(
+        f"{name!r} already exists (serial {existing[name].serial}). Reissue and "
+        "overwrite the files? The old certificate stays valid until you revoke it.",
+        default=False,
+    ):
+        return
     password = ui.ask_password("Password for the .p12 bundle (empty = unprotected):")
     state = state_mod.load_state(project)
     info = client_certs.issue_client_cert(project, name, state.next_serial, password)
