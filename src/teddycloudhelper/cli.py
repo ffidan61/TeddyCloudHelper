@@ -8,6 +8,7 @@ from rich.panel import Panel
 
 from teddycloudhelper import __version__, ui
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.menus import docker as docker_menu
 
 
 def _tool_available(args: list[str]) -> bool:
@@ -57,7 +58,7 @@ def _dispatch(action: str) -> bool:
     if action == "wizard":
         _placeholder("The setup wizard", "v0.4")
     elif action == "docker":
-        _placeholder("Docker management", "v0.2")
+        docker_menu.run()
     elif action == "certs":
         _placeholder("Certificate management", "v0.3")
     elif action in ("security", "backup"):
