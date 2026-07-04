@@ -117,6 +117,10 @@ class Compose:
     def pull(self) -> None:
         self._run("pull")
 
+    def run_service(self, service: str, *args: str) -> subprocess.CompletedProcess:
+        """One-off ``compose run --rm <service> <args…>`` (e.g. certbot certonly)."""
+        return self._run("run", "--rm", service, *args)
+
     def logs(self, tail: int = 100) -> str:
         result = self._run("logs", "--no-color", "--tail", str(tail))
         return result.stdout

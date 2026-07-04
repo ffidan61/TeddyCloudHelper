@@ -6,9 +6,9 @@ from pathlib import Path
 
 from rich.table import Table
 
+from teddycloudhelper import docker_cli, ui, wizard
 from teddycloudhelper import state as state_mod
-from teddycloudhelper import ui
-from teddycloudhelper.certs import box_certs, ca, client_certs, crl, server_certs
+from teddycloudhelper.certs import box_certs, ca, client_certs, crl, letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import project as project_menu
 
@@ -18,6 +18,8 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("List client certificates", "list"),
     ("Revoke a client certificate", "revoke"),
     ("Create self-signed WebUI server certificate", "server_cert"),
+    ("Set up Let's Encrypt for the WebUI", "letsencrypt"),
+    ("Renew Let's Encrypt certificate now", "le_renew"),
     ("Export box CA (ca.der) for flashing", "export_ca"),
     ("Install dumped box certificates", "box_certs"),
     ("Back to main menu", "back"),
@@ -31,7 +33,7 @@ def _create_ca(project: Path) -> None:
     ui.info_panel(
         f"WebUI CA created: {path}\n"
         f"Empty CRL written: {crl.crl_path(project)}\n\n"
-        "nginx will use both once the reverse-proxy templates are set up (v0.4).",
+        "nginx enforces them once client-cert auth is enabled in the setup wizard.",
         title="CA created",
     )
 
@@ -107,6 +109,63 @@ def _server_cert(project: Path) -> None:
     ui.info_panel(f"Self-signed WebUI certificate written: {path}")
 
 
+def _letsencrypt(project: Path) -> None:
+    state = state_mod.load_state(project)
+    if state.deployment_mode != "nginx":
+        ui.error_panel(
+            "Let's Encrypt needs the nginx deployment mode (the WebUI must be "
+            "TLS-terminated by nginx). Re-run the setup wizard first."
+        )
+        return
+    hostname = letsencrypt.validate_hostname(state.webui_hostname)
+    email = letsencrypt.validate_email(
+        ui.ask_text("Email for Let's Encrypt (expiry notices):",
+                    default=state.letsencrypt_email)
+    )
+    if not ui.confirm(
+        f"Port 80 on {hostname} must be reachable from the internet for the "
+        "HTTP-01 challenge. Is it?",
+        default=False,
+    ):
+        return
+
+    # Phase 1: enable the certbot service + challenge plumbing, still on the
+    # self-signed cert so nginx keeps starting.
+    state.letsencrypt_email = email
+    state_mod.save_state(state, project)
+    wizard.render_project(state, project)
+    compose = docker_cli.Compose(project)
+    compose.up()
+
+    # Phase 2: one-off issuance through the webroot nginx now serves.
+    ui.console.print("Requesting the certificate from Let's Encrypt…")
+    compose.run_service("certbot", *letsencrypt.certonly_args(hostname, email))
+
+    # Phase 3: switch nginx to the issued cert.
+    state.webui_tls_mode = "letsencrypt"
+    state_mod.save_state(state, project)
+    wizard.render_project(state, project)
+    compose.up()
+    ui.info_panel(
+        f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
+        "Renewal runs automatically twice a day (certbot side-container); "
+        "nginx reloads every 6 hours to pick up renewed certs.",
+        title="Let's Encrypt active",
+    )
+
+
+def _le_renew(project: Path) -> None:
+    state = state_mod.load_state(project)
+    if state.webui_tls_mode != "letsencrypt":
+        ui.info_panel("Let's Encrypt is not set up for this project.")
+        return
+    compose = docker_cli.Compose(project)
+    result = compose.run_service("certbot", "renew", "--webroot", "-w", "/var/www/certbot")
+    ui.console.print(result.stdout or "")
+    compose.restart()
+    ui.info_panel("Renewal attempted and nginx restarted.")
+
+
 def _export_ca(project: Path) -> None:
     dest = ui.ask_path("Export ca.der to (directory or file path):", default=str(project))
     path = server_certs.export_box_ca(project, dest)
@@ -145,6 +204,8 @@ _HANDLERS = {
     "list": _list,
     "revoke": _revoke,
     "server_cert": _server_cert,
+    "letsencrypt": _letsencrypt,
+    "le_renew": _le_renew,
     "export_ca": _export_ca,
     "box_certs": _box_certs,
 }
@@ -167,5 +228,5 @@ def run() -> None:
             _HANDLERS[action](project)
         except ui.Cancelled:
             continue
-        except (CertError, state_mod.StateError) as exc:
+        except (CertError, state_mod.StateError, docker_cli.DockerError) as exc:
             ui.error_panel(str(exc), title="Certificate error")

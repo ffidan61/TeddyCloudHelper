@@ -58,6 +58,13 @@ http {
         auth_basic "TeddyCloud WebUI";
         auth_basic_user_file /etc/teddycloudhelper/security/htpasswd;
 {%- endif %}
+        # ACME HTTP-01 challenge — must stay reachable for everyone,
+        # regardless of Basic Auth or the IP allowlist.
+        location /.well-known/acme-challenge/ {
+            auth_basic off;
+            allow all;
+            root /var/www/certbot;
+        }
         location / {
             proxy_pass http://teddycloud:80;
             proxy_set_header Host $host;
@@ -86,8 +93,13 @@ http {
         auth_basic_user_file /etc/teddycloudhelper/security/htpasswd;
 {%- endif %}
 
+{%- if webui_tls_mode == "letsencrypt" %}
+        ssl_certificate     /etc/letsencrypt/live/{{ webui_hostname }}/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/{{ webui_hostname }}/privkey.pem;
+{%- else %}
         ssl_certificate     /etc/teddycloudhelper/webui-pki/server/server.crt;
         ssl_certificate_key /etc/teddycloudhelper/webui-pki/server/server.key;
+{%- endif %}
 {%- if webui_client_cert_auth %}
         ssl_client_certificate /etc/teddycloudhelper/webui-pki/ca/ca.crt;
         ssl_crl                /etc/teddycloudhelper/webui-pki/crl/ca.crl;

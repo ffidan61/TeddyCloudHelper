@@ -51,6 +51,10 @@ class AppState:
     http_port: int = 80
     # Require browser client certs (own CA, mTLS at nginx) for the WebUI.
     webui_client_cert_auth: bool = False
+    # "selfsigned" (webui-pki/server/) or "letsencrypt" (certbot-managed).
+    webui_tls_mode: str = "selfsigned"
+    # Non-empty enables the certbot side-container in the compose file.
+    letsencrypt_email: str = ""
     basic_auth_enabled: bool = False
     ip_allowlist: list[str] = field(default_factory=list)
     # Monotone serial counter for issued client certificates.

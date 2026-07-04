@@ -11,6 +11,8 @@ DIRECT = {
     "webui_client_cert_auth": False,
     "basic_auth_enabled": False,
     "ip_allowlist": [],
+    "webui_tls_mode": "selfsigned",
+    "letsencrypt_email": "",
 }
 NGINX_SEPARATE = DIRECT | {"deployment_mode": "nginx"}
 NGINX_SHARED = NGINX_SEPARATE | {"webui_port_mode": "shared"}
@@ -121,7 +123,7 @@ def test_nginx_client_cert_auth_on():
 
 def test_nginx_security_off_by_default():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
-    assert "auth_basic" not in text
+    assert "auth_basic_user_file" not in text
     assert "deny all;" not in text
 
 
@@ -141,6 +143,51 @@ def test_nginx_allowlist_guards_both_servers():
     # the box path (stream block) must never be restricted
     stream_block = text.split("http {")[0]
     assert "deny" not in stream_block
+
+
+def test_nginx_acme_challenge_always_served():
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        assert "location /.well-known/acme-challenge/" in text
+
+
+def test_nginx_acme_challenge_bypasses_security():
+    context = NGINX_SEPARATE | {
+        "basic_auth_enabled": True,
+        "ip_allowlist": ["192.168.0.0/24"],
+    }
+    text = render.render_template("nginx.conf.j2", context)
+    challenge = text.split("location /.well-known/acme-challenge/", 1)[1].split("}", 1)[0]
+    assert "auth_basic off;" in challenge
+    assert "allow all;" in challenge
+
+
+def test_nginx_letsencrypt_cert_paths():
+    context = NGINX_SEPARATE | {"webui_tls_mode": "letsencrypt"}
+    text = render.render_template("nginx.conf.j2", context)
+    assert "ssl_certificate     /etc/letsencrypt/live/tc.example.com/fullchain.pem;" in text
+    assert "ssl_certificate_key /etc/letsencrypt/live/tc.example.com/privkey.pem;" in text
+    assert "webui-pki/server" not in text
+
+
+def test_nginx_selfsigned_cert_paths_by_default():
+    text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
+    assert "ssl_certificate     /etc/teddycloudhelper/webui-pki/server/server.crt;" in text
+    assert "letsencrypt" not in text
+
+
+def test_compose_certbot_only_with_email():
+    text = render.render_template("docker-compose.yml.j2", NGINX_SEPARATE)
+    assert "image: certbot/certbot" not in text
+    assert "letsencrypt" not in text
+    assert "- ./certbot-www:/var/www/certbot:ro" in text  # webroot mount is always there
+
+    context = NGINX_SEPARATE | {"letsencrypt_email": "a@b.de"}
+    text = render.render_template("docker-compose.yml.j2", context)
+    assert "image: certbot/certbot" in text
+    assert "certbot renew" in text
+    assert "- ./letsencrypt:/etc/letsencrypt:ro" in text
+    assert "nginx -s reload" in text  # nginx picks up renewed certs
 
 
 def test_compose_mounts_htpasswd_only_when_enabled():

@@ -105,6 +105,14 @@ def test_lifecycle_commands_build_args(tmp_path, method, expected_args):
     assert runner.calls == [(["docker", "compose", *expected_args], tmp_path)]
 
 
+def test_run_service_builds_args(tmp_path):
+    compose, runner = make_compose(tmp_path)
+    compose.run_service("certbot", "renew", "--webroot")
+    assert runner.calls == [
+        (["docker", "compose", "run", "--rm", "certbot", "renew", "--webroot"], tmp_path)
+    ]
+
+
 def test_logs_returns_stdout(tmp_path):
     compose, runner = make_compose(tmp_path, completed(stdout="line1\nline2\n"))
     assert compose.logs(tail=50) == "line1\nline2\n"

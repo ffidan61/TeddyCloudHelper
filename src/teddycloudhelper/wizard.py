@@ -104,6 +104,8 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         "webui_client_cert_auth": state.webui_client_cert_auth,
         "basic_auth_enabled": state.basic_auth_enabled,
         "ip_allowlist": state.ip_allowlist,
+        "webui_tls_mode": state.webui_tls_mode,
+        "letsencrypt_email": state.letsencrypt_email,
     }
     rendered = [
         render.render_to_file(

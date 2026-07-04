@@ -1,0 +1,82 @@
+"""Let's Encrypt for the WebUI hostname (certbot in docker, webroot HTTP-01).
+
+Only the nginx-terminated WebUI can use Let's Encrypt — the box path on 443
+is raw TLS passthrough against TeddyCloud's own CA and can never be LE.
+
+How it fits together:
+
+* nginx (nginx mode) always serves ``/.well-known/acme-challenge/`` from the
+  ``certbot-www`` volume, exempt from Basic Auth and the IP allowlist.
+* Once ``AppState.letsencrypt_email`` is set, the compose file gains a
+  certbot side-container that renews twice a day, and nginx reloads
+  periodically to pick up renewed certs.
+* The first certificate is issued with a one-off
+  ``docker compose run --rm certbot certonly …`` (see :func:`certonly_args`);
+  afterwards ``AppState.webui_tls_mode`` flips to ``"letsencrypt"`` and the
+  re-rendered nginx config points at ``/etc/letsencrypt/live/<hostname>/``.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+from pathlib import Path
+
+from teddycloudhelper.certs.ca import CertError
+
+# Names that public CAs will never issue for.
+_BLOCKED_SUFFIXES = (".local", ".localhost", ".lan", ".home", ".internal", ".arpa")
+
+
+def validate_hostname(hostname: str) -> str:
+    """Check that *hostname* can plausibly get a public certificate."""
+    hostname = hostname.strip().lower()
+    if not hostname:
+        raise CertError("No WebUI hostname configured — run the setup wizard first.")
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        raise CertError(
+            f"{hostname!r} is an IP address — Let's Encrypt only issues "
+            "certificates for public DNS names."
+        )
+    if "*" in hostname:
+        raise CertError("Wildcard hostnames need DNS-01, which this tool does not do.")
+    if "." not in hostname or hostname.endswith(_BLOCKED_SUFFIXES):
+        raise CertError(
+            f"{hostname!r} is not a public DNS name — Let's Encrypt cannot "
+            "issue for it. Use the self-signed WebUI certificate instead."
+        )
+    return hostname
+
+
+def validate_email(email: str) -> str:
+    email = email.strip()
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise CertError(f"{email!r} does not look like an email address.")
+    return email
+
+
+def certonly_args(hostname: str, email: str) -> list[str]:
+    """certbot arguments for the initial webroot issuance (idempotent)."""
+    return [
+        "certonly",
+        "--webroot",
+        "--webroot-path", "/var/www/certbot",
+        "--domain", hostname,
+        "--email", email,
+        "--agree-tos",
+        "--no-eff-email",
+        "--non-interactive",
+        "--keep-until-expiring",
+    ]
+
+
+def live_cert_dir(project_dir: Path, hostname: str) -> Path:
+    """Where certbot puts the issued cert (host side of the volume)."""
+    return project_dir / "letsencrypt" / "live" / hostname
+
+
+def cert_exists(project_dir: Path, hostname: str) -> bool:
+    return (live_cert_dir(project_dir, hostname) / "fullchain.pem").is_file()

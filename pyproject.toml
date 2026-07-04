@@ -1,10 +1,24 @@
 [project]
 name = "teddycloudhelper"
-version = "0.5.0"
+version = "0.6.0"
 description = "Interactive, menu-driven CLI toolkit to set up and manage a self-hosted TeddyCloud server"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
+authors = [{ name = "F", email = "mail@furkanfidan.de" }]
+keywords = ["teddycloud", "toniebox", "docker", "self-hosted", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+]
+
 dependencies = [
     "questionary>=2.0",
     "rich>=13.0",
@@ -13,6 +27,10 @@ dependencies = [
     "bcrypt>=4.0",
     "platformdirs>=4.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/ffidan61/TeddyCloudHelper"
+Issues = "https://github.com/ffidan61/TeddyCloudHelper/issues"
 
 [project.scripts]
 teddycloudhelper = "teddycloudhelper.cli:main"

@@ -53,7 +53,7 @@ Key decisions (confirmed with the maintainer):
 | Templates | Jinja2 for docker-compose.yml + nginx confs; render-to-file writes timestamped `.bak` first |
 | State | `AppState` dataclass → `<project>/teddycloudhelper.json` with `schema_version` + migrations (`state.py`); global "last project" pointer via `platformdirs` |
 | WebUI access | own CA + browser client certs (mTLS), enforced by **nginx** on the WebUI port (`ssl_client_certificate` + `ssl_verify_client on`, revocation via `ssl_crl`) — requires nginx deployment mode; TeddyCloud itself cannot do UI client-cert auth. Client certs are exported as PKCS#12 (`.p12`) for browser import. Basic Auth / IP allowlist (v0.5) as alternatives |
-| Let's Encrypt | not in v1 (box traffic is SNI passthrough; WebUI gets self-signed or user-provided cert) |
+| Let's Encrypt | **WebUI hostname only** (v0.6): certbot side-container, webroot HTTP-01 via an ACME location on port 80 that bypasses Basic Auth/allowlist; `AppState.webui_tls_mode` switches nginx between self-signed and LE cert paths. Box traffic stays SNI passthrough — LE is impossible there |
 
 Rules:
 
@@ -75,7 +75,8 @@ src/teddycloudhelper/
 ├── certs/         # (v0.3) ca.py (own CA for WebUI access), client_certs.py (issue/renew
 │                  #        browser certs, PKCS#12 export), crl.py (CRL for nginx ssl_crl),
 │                  #        server_certs.py (WebUI cert, ca.der extraction),
-│                  #        box_certs.py (validate + install dumped box certs)
+│                  #        box_certs.py (validate + install dumped box certs),
+│                  #        letsencrypt.py (v0.6: hostname/email checks, certbot args)
 ├── security.py    # (v0.5) htpasswd (bcrypt), IP allowlist (stdlib ipaddress)
 ├── wizard.py      # (v0.4) setup wizard as a list of testable step functions
 ├── render.py      # (v0.4) Jinja2 env, render-to-file with .bak
