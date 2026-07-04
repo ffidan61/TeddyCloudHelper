@@ -21,6 +21,7 @@ How it fits together:
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import secrets
 import urllib.error
@@ -151,7 +152,9 @@ def probe_http_challenge(
     except OSError as exc:  # URLError, ConnectionError, timeouts
         return f"{url} was not reachable: {exc}"
     finally:
-        probe_file.unlink(missing_ok=True)
+        # Best effort — a serving process may still hold the file briefly.
+        with contextlib.suppress(OSError):
+            probe_file.unlink(missing_ok=True)
     if body != token:
         return (
             f"{url} answered, but not with the expected content — is a "

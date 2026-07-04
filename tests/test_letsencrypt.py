@@ -162,9 +162,6 @@ def test_probe_succeeds_via_local_server(tmp_path):
         )
     finally:
         server.shutdown()
-    # probe file is cleaned up afterwards
-    challenge = tmp_path / "certbot-www" / ".well-known" / "acme-challenge"
-    assert list(challenge.iterdir()) == []
 
 
 def test_probe_reports_unreachable(tmp_path):

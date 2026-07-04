@@ -11,6 +11,8 @@ from pathlib import Path
 
 from teddycloudhelper import docker_cli, security, ui, wizard
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.certs import ca, crl
+from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import project as project_menu
 from teddycloudhelper.security import SecurityError
 from teddycloudhelper.state import AppState
@@ -18,6 +20,7 @@ from teddycloudhelper.state import AppState
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Show security status", "status"),
     ("Enable / disable Basic Auth", "toggle_auth"),
+    ("Require / stop requiring WebUI client certificates", "toggle_client_cert"),
     ("Add or update a Basic Auth user", "set_user"),
     ("Remove a Basic Auth user", "remove_user"),
     ("Add an IP allowlist entry", "add_ip"),
@@ -71,6 +74,36 @@ def _toggle_auth(state: AppState, project: Path) -> None:
             ui.info_panel("No users yet — create the first one.")
             _prompt_set_user(project)
         state.basic_auth_enabled = True
+    _apply(state, project)
+
+
+def _toggle_client_cert(state: AppState, project: Path) -> None:
+    if state.deployment_mode != "nginx":
+        ui.error_panel(
+            "Client-certificate auth is enforced by nginx — this project runs "
+            "in 'direct' mode. Re-run the setup wizard to switch to nginx mode."
+        )
+        return
+    if state.webui_client_cert_auth:
+        if not ui.confirm(
+            "Client certificates are currently REQUIRED for the WebUI. "
+            "Stop requiring them?",
+            default=False,
+        ):
+            return
+        state.webui_client_cert_auth = False
+    else:
+        if not ui.confirm(
+            "Require browser client certificates (mTLS, own CA) for the WebUI?",
+            default=True,
+        ):
+            return
+        state.webui_client_cert_auth = True
+        if not ca.ca_exists(project):
+            ca.create_ca(project)
+            crl.ensure_crl(project)
+            ui.info_panel("WebUI CA + empty CRL created.")
+        wizard.step_first_client_cert(state, project)
     _apply(state, project)
 
 
@@ -137,6 +170,7 @@ def _remove_ip(state: AppState, project: Path) -> None:
 _HANDLERS = {
     "status": _status,
     "toggle_auth": _toggle_auth,
+    "toggle_client_cert": _toggle_client_cert,
     "set_user": _set_user,
     "remove_user": _remove_user,
     "add_ip": _add_ip,
@@ -161,5 +195,11 @@ def run() -> None:
             _HANDLERS[action](state, project)
         except ui.Cancelled:
             continue
-        except (SecurityError, state_mod.StateError, docker_cli.DockerError, ValueError) as exc:
+        except (
+            SecurityError,
+            CertError,
+            state_mod.StateError,
+            docker_cli.DockerError,
+            ValueError,
+        ) as exc:
             ui.error_panel(str(exc), title="Security error")
