@@ -1,4 +1,9 @@
+from datetime import timedelta
+
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.x509.oid import NameOID
 
 from teddycloudhelper.certs import ca, letsencrypt
 from teddycloudhelper.certs.ca import CertError
@@ -6,11 +11,24 @@ from teddycloudhelper.state import AppState
 
 
 def write_le_cert(tmp_path, hostname, days):
-    """Plant a cert with the given remaining validity at the LE live path."""
-    ca.create_ca(tmp_path, days=days)
+    """Plant a cert with the given remaining validity (may be negative) at
+    the LE live path."""
+    key = ca.generate_key()
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+    now = ca.utcnow()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=100))
+        .not_valid_after(now + timedelta(days=days))
+        .sign(key, hashes.SHA256())
+    )
     live = letsencrypt.live_cert_dir(tmp_path, hostname)
     live.mkdir(parents=True)
-    (live / "fullchain.pem").write_bytes(ca.ca_cert_path(tmp_path).read_bytes())
+    (live / "fullchain.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
 
 
 def test_validate_hostname_accepts_public_names():
