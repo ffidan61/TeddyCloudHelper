@@ -43,6 +43,8 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
     if action == "status":
         _print_status(compose)
     elif action == "start":
+        if not project_menu.confirm_required_ports(compose.project_dir):
+            return None
         compose.up()
         _print_status(compose)
     elif action == "stop":

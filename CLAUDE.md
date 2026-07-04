@@ -72,6 +72,7 @@ src/teddycloudhelper/
 ├── ui.py          # rich Console + questionary wrappers (menu/confirm/ask_text/ask_path)
 ├── state.py       # AppState, load/save/migrations, last-project pointer
 ├── docker_cli.py  # (v0.2) Compose wrapper, injectable subprocess runner as test seam
+├── ports.py       # host-port availability checks (connect test) before starting containers
 ├── certs/         # (v0.3) ca.py (own CA for WebUI access), client_certs.py (issue/renew
 │                  #        browser certs, PKCS#12 export), crl.py (CRL for nginx ssl_crl),
 │                  #        server_certs.py (WebUI cert, ca.der extraction),

@@ -1,6 +1,7 @@
 import pytest
 
-from teddycloudhelper import ui, wizard
+from teddycloudhelper import docker_cli, ui, wizard
+from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import ca, crl, server_certs
 from teddycloudhelper.state import AppState
 
@@ -110,6 +111,82 @@ def test_step_webui_auth_keeps_existing_material(tmp_path, monkeypatch):
 
     assert ca.ca_cert_path(tmp_path).read_bytes() == before
     assert crl.revoked_serials(tmp_path) == [7]  # CRL not reset
+
+
+def test_step_letsencrypt_defaults_to_yes_for_public_hostname(monkeypatch):
+    state = AppState(webui_hostname="tc.example.com")
+    recorded = {}
+
+    def confirm(message, default=None):
+        recorded["default"] = default
+        return default
+
+    monkeypatch.setattr(ui, "confirm", confirm)
+    answer_text(monkeypatch, "a@b.de")
+
+    assert wizard.step_letsencrypt(state) == ("tc.example.com", "a@b.de")
+    assert recorded["default"] is True  # LE is the default in nginx mode
+
+
+def test_step_letsencrypt_skips_non_public_hostname(monkeypatch):
+    state = AppState(webui_hostname="teddycloud.local")
+    quiet_panels(monkeypatch)
+    monkeypatch.setattr(
+        ui, "confirm", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no prompt"))
+    )
+    assert wizard.step_letsencrypt(state) is None
+
+
+def test_step_letsencrypt_declined(monkeypatch):
+    state = AppState(webui_hostname="tc.example.com")
+    answer_confirm(monkeypatch, False)
+    assert wizard.step_letsencrypt(state) is None
+
+
+def test_step_letsencrypt_reprompts_on_bad_email(monkeypatch):
+    state = AppState(webui_hostname="tc.example.com")
+    answer_confirm(monkeypatch, True)
+    answer_text(monkeypatch, "not-an-email", "a@b.de")
+    monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
+
+    assert wizard.step_letsencrypt(state) == ("tc.example.com", "a@b.de")
+
+
+class FakeCompose:
+    """Records lifecycle calls; stands in for docker_cli.Compose."""
+
+    calls: list[tuple] = []
+
+    def __init__(self, project_dir):
+        self.project_dir = project_dir
+
+    def up(self):
+        FakeCompose.calls.append(("up",))
+
+    def run_service(self, service, *args):
+        FakeCompose.calls.append(("run", service, *args))
+
+
+def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
+    FakeCompose.calls = []
+    monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
+    quiet_panels(monkeypatch)
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+
+    wizard.setup_letsencrypt(tmp_path, state, "tc.example.com", "a@b.de")
+
+    # phase 1: up with certbot plumbing, then certonly, then up again
+    assert FakeCompose.calls[0] == ("up",)
+    assert FakeCompose.calls[1][:2] == ("run", "certbot")
+    assert "certonly" in FakeCompose.calls[1]
+    assert "tc.example.com" in FakeCompose.calls[1]
+    assert FakeCompose.calls[2] == ("up",)
+    # state persisted with the final TLS mode
+    saved = state_mod.load_state(tmp_path)
+    assert saved.webui_tls_mode == "letsencrypt"
+    assert saved.letsencrypt_email == "a@b.de"
+    # nginx config now points at the LE cert
+    assert "letsencrypt/live/tc.example.com" in (tmp_path / "nginx" / "nginx.conf").read_text()
 
 
 def test_render_project_direct(tmp_path):

@@ -12,7 +12,9 @@ from pathlib import Path
 
 from teddycloudhelper import docker_cli, render, ui
 from teddycloudhelper import state as state_mod
-from teddycloudhelper.certs import ca, crl, server_certs
+from teddycloudhelper.certs import ca, crl, letsencrypt, server_certs
+from teddycloudhelper.certs.ca import CertError
+from teddycloudhelper.menus import project as project_menu
 from teddycloudhelper.state import AppState
 
 COMPOSE_FILENAME = "docker-compose.yml"
@@ -91,6 +93,67 @@ def step_webui_auth(state: AppState, project_dir: Path) -> None:
         )
 
 
+def step_letsencrypt(state: AppState) -> tuple[str, str] | None:
+    """nginx mode: Let's Encrypt is the default when the hostname is public.
+
+    Returns (hostname, email) when the user wants LE, else None.
+    """
+    try:
+        hostname = letsencrypt.validate_hostname(state.webui_hostname)
+    except CertError:
+        ui.info_panel(
+            f"{state.webui_hostname!r} is not a public DNS name, so Let's "
+            "Encrypt is not possible — the WebUI keeps its self-signed "
+            "certificate."
+        )
+        return None
+    if not ui.confirm(
+        f"Get a free Let's Encrypt certificate for {hostname}? "
+        "(port 80 must be reachable from the internet)",
+        default=True,
+    ):
+        return None
+    while True:
+        try:
+            email = letsencrypt.validate_email(
+                ui.ask_text(
+                    "Email for Let's Encrypt (expiry notices):",
+                    default=state.letsencrypt_email,
+                )
+            )
+            return hostname, email
+        except CertError as exc:
+            ui.error_panel(str(exc))
+
+
+def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: str) -> None:
+    """Three-phase issuance; assumes the rendered project is ready to start.
+
+    1. Enable the certbot service + ACME plumbing (nginx still self-signed).
+    2. One-off ``certonly`` through the webroot nginx now serves.
+    3. Switch nginx to the issued cert and restart.
+    """
+    state.letsencrypt_email = email
+    state_mod.save_state(state, project_dir)
+    render_project(state, project_dir)
+    compose = docker_cli.Compose(project_dir)
+    compose.up()
+
+    ui.console.print("Requesting the certificate from Let's Encrypt…")
+    compose.run_service("certbot", *letsencrypt.certonly_args(hostname, email))
+
+    state.webui_tls_mode = "letsencrypt"
+    state_mod.save_state(state, project_dir)
+    render_project(state, project_dir)
+    compose.up()
+    ui.info_panel(
+        f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
+        "Renewal runs automatically twice a day (certbot side-container); "
+        "nginx reloads every 6 hours to pick up renewed certs.",
+        title="Let's Encrypt active",
+    )
+
+
 def render_project(state: AppState, project_dir: Path) -> list[Path]:
     """Render all config files for the chosen mode (existing files get a .bak)."""
     if state.deployment_mode == "nginx" and not state.webui_hostname:
@@ -131,9 +194,11 @@ def run() -> None:
         state = AppState()
 
     step_deployment_mode(state)
+    le: tuple[str, str] | None = None
     if state.deployment_mode == "nginx":
         step_webui(state)
         step_webui_auth(state, project_dir)
+        le = step_letsencrypt(state)
 
     state_mod.save_state(state, project_dir)
     state_mod.save_last_project(project_dir)
@@ -143,9 +208,19 @@ def run() -> None:
         title="Setup complete",
     )
 
-    if ui.confirm("Start (or restart) the services now?", default=True):
-        compose = docker_cli.Compose(project_dir)
-        compose.up()
-        ui.info_panel("Services started. TeddyCloud generates its server certs on "
-                      "first start — export certs/server/ca.der via the certificate "
-                      "menu afterwards to flash it onto the box.")
+    if not ui.confirm("Start (or restart) the services now?", default=True):
+        if le is not None:
+            ui.info_panel(
+                "Let's Encrypt needs running services — set it up later via "
+                "the certificate menu."
+            )
+        return
+    if not project_menu.confirm_required_ports(project_dir):
+        return
+    if le is not None:
+        setup_letsencrypt(project_dir, state, *le)
+    else:
+        docker_cli.Compose(project_dir).up()
+    ui.info_panel("Services started. TeddyCloud generates its server certs on "
+                  "first start — export certs/server/ca.der via the certificate "
+                  "menu afterwards to flash it onto the box.")

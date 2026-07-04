@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from teddycloudhelper import docker_cli, ui
+from teddycloudhelper import docker_cli, ports, ui
 from teddycloudhelper import state as state_mod
 
 
@@ -36,6 +36,33 @@ def adopt_project() -> Path | None:
         state_mod.save_state(state_mod.AppState(), directory)
     state_mod.save_last_project(directory)
     return directory
+
+
+def confirm_required_ports(project: Path) -> bool:
+    """Warn when the project's public ports are already taken on this host.
+
+    Returns True when starting is fine: ports free, the ports belong to this
+    project's own (running) containers, or the user chose to continue anyway.
+    """
+    try:
+        state = state_mod.load_state(project)
+    except state_mod.StateError:
+        return True  # nothing to check against; let docker report problems
+    busy = ports.check_ports(ports.required_ports(state))
+    if not busy:
+        return True
+    try:
+        if any(svc.state == "running" for svc in docker_cli.Compose(project).ps()):
+            return True  # most likely our own already-running stack
+    except docker_cli.DockerError:
+        pass
+    ui.error_panel(
+        f"Port(s) {', '.join(str(p) for p in busy)} are already in use on this "
+        "host — another service (web server?) seems to listen there. Starting "
+        "the containers will most likely fail.",
+        title="Ports busy",
+    )
+    return ui.confirm("Try to start anyway?", default=False)
 
 
 def active_project() -> Path | None:

@@ -128,30 +128,7 @@ def _letsencrypt(project: Path) -> None:
         default=False,
     ):
         return
-
-    # Phase 1: enable the certbot service + challenge plumbing, still on the
-    # self-signed cert so nginx keeps starting.
-    state.letsencrypt_email = email
-    state_mod.save_state(state, project)
-    wizard.render_project(state, project)
-    compose = docker_cli.Compose(project)
-    compose.up()
-
-    # Phase 2: one-off issuance through the webroot nginx now serves.
-    ui.console.print("Requesting the certificate from Let's Encrypt…")
-    compose.run_service("certbot", *letsencrypt.certonly_args(hostname, email))
-
-    # Phase 3: switch nginx to the issued cert.
-    state.webui_tls_mode = "letsencrypt"
-    state_mod.save_state(state, project)
-    wizard.render_project(state, project)
-    compose.up()
-    ui.info_panel(
-        f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
-        "Renewal runs automatically twice a day (certbot side-container); "
-        "nginx reloads every 6 hours to pick up renewed certs.",
-        title="Let's Encrypt active",
-    )
+    wizard.setup_letsencrypt(project, state, hostname, email)
 
 
 def _le_renew(project: Path) -> None:
