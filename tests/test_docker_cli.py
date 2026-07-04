@@ -105,6 +105,20 @@ def test_lifecycle_commands_build_args(tmp_path, method, expected_args):
     assert runner.calls == [(["docker", "compose", *expected_args], tmp_path)]
 
 
+def test_down_without_volumes(tmp_path):
+    compose, runner = make_compose(tmp_path)
+    compose.down()
+    assert runner.calls == [(["docker", "compose", "down", "--remove-orphans"], tmp_path)]
+
+
+def test_down_with_volumes(tmp_path):
+    compose, runner = make_compose(tmp_path)
+    compose.down(volumes=True)
+    assert runner.calls == [
+        (["docker", "compose", "down", "--remove-orphans", "--volumes"], tmp_path)
+    ]
+
+
 def test_run_service_builds_args(tmp_path):
     compose, runner = make_compose(tmp_path)
     compose.run_service("certbot", "renew", "--webroot")

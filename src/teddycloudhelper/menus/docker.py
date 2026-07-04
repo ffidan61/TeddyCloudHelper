@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rich.table import Table
 
-from teddycloudhelper import docker_cli, ui
+from teddycloudhelper import backup, docker_cli, ui
 from teddycloudhelper.menus import project as project_menu
 
 MENU_ACTIONS: list[tuple[str, str]] = [
@@ -16,6 +16,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Restart services", "restart"),
     ("Show recent logs", "logs"),
     ("Pull latest images", "pull"),
+    ("Reset project (down incl. volumes)", "reset"),
     ("Switch / adopt another project", "switch"),
     ("Back to main menu", "back"),
 ]
@@ -58,9 +59,46 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
         if ui.confirm("Restart services now to use the new images?", default=True):
             compose.restart()
             _print_status(compose)
+    elif action == "reset":
+        _reset(compose)
     elif action == "switch":
         return project_menu.adopt_project()
     return None
+
+
+def _reset(compose: docker_cli.Compose) -> None:
+    project = compose.project_dir
+    if not ui.confirm(
+        "This stops and removes ALL containers, networks and Docker volumes of "
+        "this project. Data in named volumes (adopted installs often keep "
+        "TeddyCloud's config, certs and content there) is deleted PERMANENTLY. "
+        "Continue?",
+        default=False,
+    ):
+        return
+    if ui.confirm("Create a backup of config + certificates first?", default=True):
+        try:
+            path = backup.create_backup(project)
+            ui.info_panel(f"Backup written: {path}")
+        except backup.BackupError as exc:
+            ui.error_panel(str(exc), title="Backup failed")
+            if not ui.confirm("Reset anyway, WITHOUT a backup?", default=False):
+                return
+    typed = ui.ask_text(
+        f"Type the project folder name ({project.name!r}) to confirm the reset:"
+    )
+    if typed.strip() != project.name:
+        ui.info_panel("Name did not match — reset cancelled.")
+        return
+    compose.down(volumes=True)
+    ui.info_panel(
+        "Containers, networks and volumes removed.\n\n"
+        "Files in the project directory itself (bind mounts like certs/, "
+        "config/, content/ and the generated configs) are NOT touched — "
+        "delete them manually if you want a truly clean slate, but keep "
+        "certs/client/ (the dumped box certs are irreplaceable!).",
+        title="Project reset",
+    )
 
 
 def run() -> None:

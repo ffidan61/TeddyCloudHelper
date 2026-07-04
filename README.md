@@ -11,7 +11,8 @@ reimplemented from scratch in Python.
   - *direct*: TeddyCloud publishes its own ports (simplest)
   - *nginx*: reverse proxy with raw TLS passthrough for the Toniebox on port 443
     (SNI split or a separate WebUI port) and a TLS-terminated WebUI
-- **Docker management** — status, start/stop/restart, logs, image updates;
+- **Docker management** — status, start/stop/restart, logs, image updates,
+  project reset (`down` incl. volumes, with backup offer and typed confirmation);
   adopts existing installations
 - **Certificates**
   - own CA + browser client certificates (mTLS) as WebUI access control,

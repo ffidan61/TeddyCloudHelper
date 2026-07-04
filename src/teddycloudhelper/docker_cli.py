@@ -117,6 +117,14 @@ class Compose:
     def pull(self) -> None:
         self._run("pull")
 
+    def down(self, volumes: bool = False) -> None:
+        """Stop and remove containers/networks; ``volumes=True`` also deletes
+        the project's named and anonymous volumes (irreversible)."""
+        args = ["down", "--remove-orphans"]
+        if volumes:
+            args.append("--volumes")
+        self._run(*args)
+
     def run_service(self, service: str, *args: str) -> subprocess.CompletedProcess:
         """One-off ``compose run --rm <service> <args…>`` (e.g. certbot certonly)."""
         return self._run("run", "--rm", service, *args)
