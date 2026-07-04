@@ -1,0 +1,156 @@
+"""Security submenu: Basic Auth users (htpasswd) and the IP allowlist.
+
+Every change follows the standard cycle: update state → re-render templates
+(with ``.bak``) → prompt for restart. Both features are enforced by nginx,
+so in "direct" deployment mode they are stored but have no effect.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from teddycloudhelper import docker_cli, security, ui, wizard
+from teddycloudhelper import state as state_mod
+from teddycloudhelper.menus import project as project_menu
+from teddycloudhelper.security import SecurityError
+from teddycloudhelper.state import AppState
+
+MENU_ACTIONS: list[tuple[str, str]] = [
+    ("Show security status", "status"),
+    ("Enable / disable Basic Auth", "toggle_auth"),
+    ("Add or update a Basic Auth user", "set_user"),
+    ("Remove a Basic Auth user", "remove_user"),
+    ("Add an IP allowlist entry", "add_ip"),
+    ("Remove an IP allowlist entry", "remove_ip"),
+    ("Back to main menu", "back"),
+]
+
+
+def _status(state: AppState, project: Path) -> None:
+    users = security.load_users(project)
+    lines = [
+        f"Basic Auth: {'enabled' if state.basic_auth_enabled else 'disabled'}"
+        f" ({len(users)} user(s): {', '.join(users) or '—'})",
+        f"IP allowlist: {', '.join(state.ip_allowlist) or 'off (all IPs allowed)'}",
+        f"WebUI client certificates: "
+        f"{'required' if state.webui_client_cert_auth else 'not required'}",
+    ]
+    if state.deployment_mode != "nginx":
+        lines.append(
+            "\n[bold red]Deployment mode is 'direct' — these settings are only "
+            "enforced by nginx and currently have no effect![/bold red]"
+        )
+    ui.info_panel("\n".join(lines), title="Security status")
+
+
+def _apply(state: AppState, project: Path) -> None:
+    """The standard cycle: save state, re-render, offer restart."""
+    state_mod.save_state(state, project)
+    rendered = wizard.render_project(state, project)
+    ui.console.print("Re-rendered: " + ", ".join(str(p) for p in rendered))
+    if ui.confirm("Restart services now to apply the change?", default=True):
+        docker_cli.Compose(project).up()
+
+
+def _toggle_auth(state: AppState, project: Path) -> None:
+    if state.basic_auth_enabled:
+        if not ui.confirm("Basic Auth is enabled. Disable it?", default=False):
+            return
+        state.basic_auth_enabled = False
+    else:
+        if not security.load_users(project):
+            ui.info_panel("No users yet — create the first one.")
+            _prompt_set_user(project)
+        state.basic_auth_enabled = True
+    _apply(state, project)
+
+
+def _prompt_set_user(project: Path) -> None:
+    username = ui.ask_text("Username:")
+    password = ui.ask_password("Password:")
+    security.set_user(project, username, password)
+    ui.info_panel(f"User {username!r} written to {security.htpasswd_path(project)}.")
+
+
+def _set_user(state: AppState, project: Path) -> None:
+    _prompt_set_user(project)
+    if state.basic_auth_enabled:
+        ui.info_panel("htpasswd changed — nginx picks it up on the next restart.")
+        if ui.confirm("Restart services now?", default=True):
+            docker_cli.Compose(project).up()
+
+
+def _remove_user(state: AppState, project: Path) -> None:
+    users = security.load_users(project)
+    if not users:
+        ui.info_panel("No Basic Auth users exist.")
+        return
+    username = ui.menu("Remove which user?", [(u, u) for u in users])
+    if len(users) == 1 and state.basic_auth_enabled:
+        ui.error_panel(
+            f"{username!r} is the last user while Basic Auth is enabled — "
+            "removing it would lock everyone out. Disable Basic Auth first."
+        )
+        return
+    security.remove_user(project, username)
+    ui.info_panel(f"User {username!r} removed.")
+
+
+def _add_ip(state: AppState, project: Path) -> None:
+    entry = security.normalize_allowlist_entry(
+        ui.ask_text("IP address or network (e.g. 192.168.0.0/24):")
+    )
+    if entry in state.ip_allowlist:
+        ui.info_panel(f"{entry} is already on the allowlist.")
+        return
+    if not state.ip_allowlist:
+        ui.info_panel(
+            "This is the first entry — from now on, ALL other IPs are denied "
+            "access to the web ports. Make sure your own address is covered!"
+        )
+    state.ip_allowlist.append(entry)
+    _apply(state, project)
+
+
+def _remove_ip(state: AppState, project: Path) -> None:
+    if not state.ip_allowlist:
+        ui.info_panel("The IP allowlist is empty.")
+        return
+    entry = ui.menu(
+        "Remove which entry?", [(e, e) for e in state.ip_allowlist]
+    )
+    state.ip_allowlist.remove(entry)
+    if not state.ip_allowlist:
+        ui.info_panel("Allowlist is now empty — all IPs are allowed again.")
+    _apply(state, project)
+
+
+_HANDLERS = {
+    "status": _status,
+    "toggle_auth": _toggle_auth,
+    "set_user": _set_user,
+    "remove_user": _remove_user,
+    "add_ip": _add_ip,
+    "remove_ip": _remove_ip,
+}
+
+
+def run() -> None:
+    project = project_menu.active_project()
+    if project is None:
+        return
+    while True:
+        ui.console.print(f"Active project: [bold]{project}[/bold]")
+        try:
+            action = ui.menu("Security", MENU_ACTIONS)
+        except ui.Cancelled:
+            return
+        if action == "back":
+            return
+        try:
+            state = state_mod.load_state(project)
+            _HANDLERS[action](state, project)
+        except ui.Cancelled:
+            continue
+        except (SecurityError, state_mod.StateError, docker_cli.DockerError, ValueError) as exc:
+            ui.error_panel(str(exc), title="Security error")

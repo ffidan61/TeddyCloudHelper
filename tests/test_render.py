@@ -9,6 +9,8 @@ DIRECT = {
     "webui_port": 8443,
     "http_port": 80,
     "webui_client_cert_auth": False,
+    "basic_auth_enabled": False,
+    "ip_allowlist": [],
 }
 NGINX_SEPARATE = DIRECT | {"deployment_mode": "nginx"}
 NGINX_SHARED = NGINX_SEPARATE | {"webui_port_mode": "shared"}
@@ -115,3 +117,34 @@ def test_nginx_client_cert_auth_on():
     assert "ssl_verify_client on;" in text
     assert "ssl_client_certificate /etc/teddycloudhelper/webui-pki/ca/ca.crt;" in text
     assert "ssl_crl" in text
+
+
+def test_nginx_security_off_by_default():
+    text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
+    assert "auth_basic" not in text
+    assert "deny all;" not in text
+
+
+def test_nginx_basic_auth_guards_both_servers():
+    context = NGINX_SEPARATE | {"basic_auth_enabled": True}
+    text = render.render_template("nginx.conf.j2", context)
+    assert text.count('auth_basic "TeddyCloud WebUI";') == 2  # port 80 + WebUI
+    assert text.count("auth_basic_user_file /etc/teddycloudhelper/security/htpasswd;") == 2
+
+
+def test_nginx_allowlist_guards_both_servers():
+    context = NGINX_SEPARATE | {"ip_allowlist": ["192.168.0.0/24", "10.0.0.5"]}
+    text = render.render_template("nginx.conf.j2", context)
+    assert text.count("allow 192.168.0.0/24;") == 2
+    assert text.count("allow 10.0.0.5;") == 2
+    assert text.count("deny all;") == 2
+    # the box path (stream block) must never be restricted
+    stream_block = text.split("http {")[0]
+    assert "deny" not in stream_block
+
+
+def test_compose_mounts_htpasswd_only_when_enabled():
+    assert "./security" not in render.render_template("docker-compose.yml.j2", NGINX_SEPARATE)
+    context = NGINX_SEPARATE | {"basic_auth_enabled": True}
+    text = render.render_template("docker-compose.yml.j2", context)
+    assert "- ./security:/etc/teddycloudhelper/security:ro" in text

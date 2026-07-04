@@ -8,8 +8,10 @@ from rich.panel import Panel
 
 from teddycloudhelper import __version__, ui, wizard
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.menus import backup as backup_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
+from teddycloudhelper.menus import security as security_menu
 
 
 def _tool_available(args: list[str]) -> bool:
@@ -35,13 +37,6 @@ def preflight() -> list[str]:
     return warnings
 
 
-def _placeholder(feature: str, milestone: str) -> None:
-    ui.info_panel(
-        f"{feature} is not implemented yet — planned for {milestone}.",
-        title="Coming soon",
-    )
-
-
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Set up a new TeddyCloud project", "wizard"),
     ("Manage Docker services", "docker"),
@@ -62,8 +57,10 @@ def _dispatch(action: str) -> bool:
         docker_menu.run()
     elif action == "certs":
         certs_menu.run()
-    elif action in ("security", "backup"):
-        _placeholder("This feature", "v0.5")
+    elif action == "security":
+        security_menu.run()
+    elif action == "backup":
+        backup_menu.run()
     return True
 
 

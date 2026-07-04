@@ -102,6 +102,8 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         "webui_port": state.webui_port,
         "http_port": state.http_port,
         "webui_client_cert_auth": state.webui_client_cert_auth,
+        "basic_auth_enabled": state.basic_auth_enabled,
+        "ip_allowlist": state.ip_allowlist,
     }
     rendered = [
         render.render_to_file(
