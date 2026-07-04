@@ -28,13 +28,18 @@ uv run pytest tests/test_state.py::test_save_then_load_roundtrip   # single test
   certificate directly against TeddyCloud (mTLS), so a reverse proxy in front of it must
   do raw **TLS passthrough** (nginx `stream` + `ssl_preread` for SNI routing) — never
   TLS termination on the box path.
-- Certificate layout on the TeddyCloud side: `certs/server/` and `certs/client/`
-  (`c2.der` / `client.der`). Server certs are auto-generated on first container start;
-  extract `certs/server/ca.der` afterwards to flash onto the box.
+- Certificate layout on the TeddyCloud side: `certs/server/` and `certs/client/`.
+  Server certs are auto-generated on first container start; extract
+  `certs/server/ca.der` afterwards to flash onto the box.
+- `certs/client/` (`ca.der` / `client.der` / `private.der`) holds the **original certs
+  dumped from the box** — TeddyCloud uses them as a *client* to authenticate against the
+  real Boxine cloud (fetching original content). They are irreplaceable; back them up.
 - Connecting a box: dump its original certs → flash the replacement CA → redirect DNS
   (`prod.de.tbs.toys` etc.) to the TeddyCloud host.
-- Open question: does TeddyCloud consume a CRL directly, or is client validation purely
-  TLS-level? Verify before building revocation UX (v0.3).
+- **TeddyCloud has no CRL support** (verified 2026-07: "crl" appears only in its vendored
+  libs — CycloneSSL, FatFs — never in TeddyCloud's own code). Box client-cert validation
+  is purely TLS-level; boxes are identified by the cert CN (the MAC address). Therefore
+  all revocation UX targets **nginx** (`ssl_crl`), never TeddyCloud itself.
 
 ## Architecture
 
@@ -47,6 +52,7 @@ Key decisions (confirmed with the maintainer):
 | Certificates | `cryptography` library (no openssl shell-out); htpasswd via `bcrypt` directly |
 | Templates | Jinja2 for docker-compose.yml + nginx confs; render-to-file writes timestamped `.bak` first |
 | State | `AppState` dataclass → `<project>/teddycloudhelper.json` with `schema_version` + migrations (`state.py`); global "last project" pointer via `platformdirs` |
+| WebUI access | own CA + browser client certs (mTLS), enforced by **nginx** on the WebUI port (`ssl_client_certificate` + `ssl_verify_client on`, revocation via `ssl_crl`) — requires nginx deployment mode; TeddyCloud itself cannot do UI client-cert auth. Client certs are exported as PKCS#12 (`.p12`) for browser import. Basic Auth / IP allowlist (v0.5) as alternatives |
 | Let's Encrypt | not in v1 (box traffic is SNI passthrough; WebUI gets self-signed or user-provided cert) |
 
 Rules:
@@ -66,7 +72,10 @@ src/teddycloudhelper/
 ├── ui.py          # rich Console + questionary wrappers (menu/confirm/ask_text/ask_path)
 ├── state.py       # AppState, load/save/migrations, last-project pointer
 ├── docker_cli.py  # (v0.2) Compose wrapper, injectable subprocess runner as test seam
-├── certs/         # (v0.3) ca.py, client_certs.py (PEM+DER), crl.py, server_certs.py
+├── certs/         # (v0.3) ca.py (own CA for WebUI access), client_certs.py (issue/renew
+│                  #        browser certs, PKCS#12 export), crl.py (CRL for nginx ssl_crl),
+│                  #        server_certs.py (WebUI cert, ca.der extraction),
+│                  #        box_certs.py (validate + install dumped box certs)
 ├── security.py    # (v0.5) htpasswd (bcrypt), IP allowlist (stdlib ipaddress)
 ├── wizard.py      # (v0.4) setup wizard as a list of testable step functions
 ├── render.py      # (v0.4) Jinja2 env, render-to-file with .bak
@@ -77,6 +86,7 @@ src/teddycloudhelper/
 
 ### Roadmap
 
-v0.1 skeleton (this) → v0.2 Docker management (adopt existing installs) → v0.3 certificates
-(CA, issue/renew/revoke, CRL, DER export) → v0.4 setup wizard + templates → v0.5 security +
+v0.1 skeleton → v0.2 Docker management (adopt existing installs) → v0.3 certificates
+(own CA, WebUI client certs issue/renew/revoke + CRL for nginx, PKCS#12 export, dumped
+box-cert handling, ca.der export) → v0.4 setup wizard + templates → v0.5 security +
 backup → v0.6+ Let's Encrypt for the WebUI hostname, PyPI release.
