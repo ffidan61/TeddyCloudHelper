@@ -25,7 +25,7 @@ reimplemented from scratch in Python.
 ## Installation
 
 ```sh
-uv tool install teddycloudhelper   # or: pipx install teddycloudhelper
+uv tool install git+https://github.com/ffidan61/TeddyCloudHelper
 teddycloudhelper
 ```
 
