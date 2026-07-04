@@ -123,3 +123,52 @@ def test_renewal_warning_expired_cert(tmp_path):
     write_le_cert(tmp_path, "tc.example.com", days=-2)
     warning = letsencrypt.renewal_warning(tmp_path, le_state())
     assert warning is not None and "EXPIRED" in warning
+
+
+def test_renewal_warning_degrades_on_read_error(tmp_path, monkeypatch):
+    # e.g. ./letsencrypt is root-owned (certbot container) — the warning must
+    # surface the problem instead of crashing or staying silent
+    def boom(*a, **kw):
+        raise CertError("permission denied reading fullchain.pem")
+
+    monkeypatch.setattr(letsencrypt, "cert_expiry", boom)
+    warning = letsencrypt.renewal_warning(tmp_path, le_state())
+    assert warning is not None and "Could not check" in warning
+
+
+# --- challenge self-test --------------------------------------------------------
+
+
+def serve_directory(directory):
+    import http.server
+    import threading
+    from functools import partial
+
+    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_probe_succeeds_via_local_server(tmp_path):
+    server = serve_directory(tmp_path / "certbot-www")
+    (tmp_path / "certbot-www").mkdir()
+    try:
+        assert (
+            letsencrypt.probe_http_challenge(
+                tmp_path, "127.0.0.1", port=server.server_address[1]
+            )
+            is None
+        )
+    finally:
+        server.shutdown()
+    # probe file is cleaned up afterwards
+    challenge = tmp_path / "certbot-www" / ".well-known" / "acme-challenge"
+    assert list(challenge.iterdir()) == []
+
+
+def test_probe_reports_unreachable(tmp_path):
+    problem = letsencrypt.probe_http_challenge(
+        tmp_path, "127.0.0.1", timeout=2, port=1  # nothing listens on port 1
+    )
+    assert problem is not None and "was not reachable" in problem

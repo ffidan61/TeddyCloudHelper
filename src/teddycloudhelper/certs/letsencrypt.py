@@ -22,6 +22,9 @@ How it fits together:
 from __future__ import annotations
 
 import ipaddress
+import secrets
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -85,7 +88,17 @@ def live_cert_dir(project_dir: Path, hostname: str) -> Path:
 
 
 def cert_exists(project_dir: Path, hostname: str) -> bool:
-    return (live_cert_dir(project_dir, hostname) / "fullchain.pem").is_file()
+    path = live_cert_dir(project_dir, hostname) / "fullchain.pem"
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False
+    except (PermissionError, NotADirectoryError):
+        # certbot runs as root in its container and typically leaves
+        # ./letsencrypt root-owned — not being allowed to look inside still
+        # means issuance happened.
+        return True
+    return True
 
 
 def cert_expiry(project_dir: Path, hostname: str) -> datetime | None:
@@ -95,12 +108,56 @@ def cert_expiry(project_dir: Path, hostname: str) -> datetime | None:
         data = path.read_bytes()
     except FileNotFoundError:
         return None
+    except PermissionError:
+        raise CertError(
+            f"Cannot read {path} (permission denied). certbot runs as root "
+            "inside its container, so ./letsencrypt on the host is usually "
+            "root-owned — run this tool with sudo to check the certificate."
+        ) from None
     try:
         # The first cert in the fullchain is the leaf.
         cert = x509.load_pem_x509_certificate(data)
     except ValueError as exc:
         raise CertError(f"{path} is not a valid PEM certificate: {exc}") from exc
     return cert.not_valid_after_utc
+
+
+def probe_http_challenge(
+    project_dir: Path, hostname: str, timeout: float = 10, port: int = 80
+) -> str | None:
+    """End-to-end self-test of the ACME challenge path through running nginx.
+
+    Writes a token file into the certbot webroot and fetches it via
+    ``http://hostname/.well-known/acme-challenge/…``. Returns None on
+    success, otherwise a description of what failed. Runs from this host,
+    so a router without hairpin NAT can fail here while Let's Encrypt
+    still succeeds from outside — callers should offer to continue anyway.
+    """
+    challenge_dir = project_dir / "certbot-www" / ".well-known" / "acme-challenge"
+    token = secrets.token_hex(16)
+    probe_file = challenge_dir / f"tch-probe-{token}"
+    try:
+        challenge_dir.mkdir(parents=True, exist_ok=True)
+        probe_file.write_text(token, encoding="utf-8")
+    except OSError as exc:
+        return (
+            f"could not write the probe file into {challenge_dir}: {exc} "
+            "(directory root-owned from an earlier docker start?)"
+        )
+    url = f"http://{hostname}:{port}/.well-known/acme-challenge/{probe_file.name}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            body = response.read(200).decode("utf-8", "replace").strip()
+    except OSError as exc:  # URLError, ConnectionError, timeouts
+        return f"{url} was not reachable: {exc}"
+    finally:
+        probe_file.unlink(missing_ok=True)
+    if body != token:
+        return (
+            f"{url} answered, but not with the expected content — is a "
+            "different web server listening on port 80?"
+        )
+    return None
 
 
 def renewal_warning(project_dir: Path, state: AppState) -> str | None:
@@ -112,7 +169,12 @@ def renewal_warning(project_dir: Path, state: AppState) -> str | None:
     """
     if state.webui_tls_mode != "letsencrypt":
         return None
-    expiry = cert_expiry(project_dir, state.webui_hostname)
+    try:
+        expiry = cert_expiry(project_dir, state.webui_hostname)
+    except CertError as exc:
+        # Degrade to a notice instead of hiding the problem (typically:
+        # ./letsencrypt is root-owned and the tool runs unprivileged).
+        return f"Could not check the Let's Encrypt certificate: {exc}"
     if expiry is None:
         return (
             "Let's Encrypt mode is active but no certificate was found in "

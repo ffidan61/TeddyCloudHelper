@@ -169,8 +169,28 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None
     state.letsencrypt_enabled = True
     state_mod.save_state(state, project_dir)
     render_project(state, project_dir)
+    # Create the webroot before docker does, so it is owned by this user and
+    # the challenge self-test below can write its probe file.
+    (project_dir / "certbot-www").mkdir(parents=True, exist_ok=True)
     compose = docker_cli.Compose(project_dir)
     compose.up()
+
+    ui.console.print("Testing the HTTP-01 challenge path…")
+    problem = letsencrypt.probe_http_challenge(project_dir, hostname)
+    if problem is not None:
+        ui.error_panel(
+            f"Self-test of the challenge URL failed:\n{problem}\n\n"
+            "Checked from this machine — some routers block connections to "
+            "their own public IP ('hairpin NAT'), so Let's Encrypt might "
+            "still succeed from outside.",
+            title="Challenge self-test failed",
+        )
+        if not ui.confirm("Try the Let's Encrypt request anyway?", default=False):
+            ui.info_panel(
+                "Aborted — the WebUI stays on the self-signed certificate. "
+                "Fix the port-80 forwarding/DNS and retry via the certificate menu."
+            )
+            return
 
     ui.console.print("Requesting the certificate from Let's Encrypt…")
     result = compose.run_service(

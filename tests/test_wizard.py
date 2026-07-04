@@ -229,11 +229,18 @@ class FakeCompose:
         return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
 
+def quiet_probe(monkeypatch, result=None):
+    from teddycloudhelper.certs import letsencrypt
+
+    monkeypatch.setattr(letsencrypt, "probe_http_challenge", lambda *a, **kw: result)
+
+
 def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
     FakeCompose.calls = []
     FakeCompose.issue_cert = True
     monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
     quiet_panels(monkeypatch)
+    quiet_probe(monkeypatch)
     state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
 
     wizard.setup_letsencrypt(tmp_path, state, "tc.example.com")
@@ -260,6 +267,7 @@ def test_setup_letsencrypt_aborts_when_no_cert_appears(tmp_path, monkeypatch):
     FakeCompose.issue_cert = False  # certbot "succeeds" but writes nothing
     monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
     quiet_panels(monkeypatch)
+    quiet_probe(monkeypatch)
     state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
 
     with pytest.raises(wizard.CertError, match="no certificate appeared"):
@@ -270,6 +278,22 @@ def test_setup_letsencrypt_aborts_when_no_cert_appears(tmp_path, monkeypatch):
     assert saved.webui_tls_mode == "selfsigned"
     assert "letsencrypt/live" not in (tmp_path / "nginx" / "nginx.conf").read_text()
     assert ("restart",) not in FakeCompose.calls
+
+
+def test_setup_letsencrypt_aborts_when_probe_fails_and_user_declines(tmp_path, monkeypatch):
+    FakeCompose.calls = []
+    monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
+    quiet_panels(monkeypatch)
+    monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
+    quiet_probe(monkeypatch, result="port 80 was not reachable")
+    answer_confirm(monkeypatch, False)  # do not try anyway
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+
+    wizard.setup_letsencrypt(tmp_path, state, "tc.example.com")
+
+    # certbot was never invoked, nginx stays self-signed
+    assert all(call[0] != "run" for call in FakeCompose.calls)
+    assert state_mod.load_state(tmp_path).webui_tls_mode == "selfsigned"
 
 
 def test_render_project_direct(tmp_path):

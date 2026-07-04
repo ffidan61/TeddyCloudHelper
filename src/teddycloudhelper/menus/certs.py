@@ -118,12 +118,8 @@ def _letsencrypt(project: Path) -> None:
         )
         return
     hostname = letsencrypt.validate_hostname(state.webui_hostname)
-    if not ui.confirm(
-        f"Port 80 on {hostname} must be reachable from the internet for the "
-        "HTTP-01 challenge. Is it?",
-        default=False,
-    ):
-        return
+    # Reachability of port 80 is not asked but verified: setup_letsencrypt
+    # runs a challenge self-test and only asks when that fails.
     wizard.setup_letsencrypt(project, state, hostname)
 
 
