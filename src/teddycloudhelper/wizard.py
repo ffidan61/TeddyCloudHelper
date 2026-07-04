@@ -12,7 +12,7 @@ from pathlib import Path
 
 from teddycloudhelper import docker_cli, render, ui
 from teddycloudhelper import state as state_mod
-from teddycloudhelper.certs import ca, crl, letsencrypt, server_certs
+from teddycloudhelper.certs import ca, client_certs, crl, letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import project as project_menu
 from teddycloudhelper.state import AppState
@@ -97,10 +97,41 @@ def step_webui_auth(state: AppState, project_dir: Path) -> None:
     if state.webui_client_cert_auth and not ca.ca_exists(project_dir):
         ca.create_ca(project_dir)
         crl.ensure_crl(project_dir)
+        ui.info_panel("WebUI CA + empty CRL created.")
+
+
+def step_first_client_cert(state: AppState, project_dir: Path) -> None:
+    """Offer the first browser cert right away — without one the WebUI locks
+    the user out as soon as client-cert auth goes live."""
+    if not state.webui_client_cert_auth or client_certs.list_client_certs(project_dir):
+        return
+    if not ui.confirm(
+        "Create the first client certificate now? (Without one imported in "
+        "your browser, the WebUI will be unreachable once nginx starts.)",
+        default=True,
+    ):
         ui.info_panel(
-            "WebUI CA + empty CRL created. Issue client certificates via the "
-            "certificate menu — without one in the browser, the WebUI is unreachable!"
+            "Remember to issue one via the certificate menu BEFORE relying on "
+            "the WebUI — client-cert auth locks everyone out otherwise."
         )
+        return
+    while True:
+        name = ui.ask_text("Name for this certificate:", default="admin")
+        password = ui.ask_password("Password for the .p12 bundle (empty = unprotected):")
+        try:
+            info = client_certs.issue_client_cert(
+                project_dir, name, state.next_serial, password
+            )
+            break
+        except CertError as exc:
+            ui.error_panel(str(exc))
+    state.next_serial += 1
+    state_mod.save_state(state, project_dir)
+    ui.info_panel(
+        f"Issued {info.name} (serial {info.serial}).\n\n"
+        f"Import this file into your browser: {info.p12_path}",
+        title="Client certificate issued",
+    )
 
 
 def step_letsencrypt(state: AppState) -> tuple[str, str] | None:
@@ -160,6 +191,9 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str, email: 
     state_mod.save_state(state, project_dir)
     render_project(state, project_dir)
     compose.up()
+    # nginx.conf is bind-mounted; the compose definition did not change in
+    # this phase, so `up` alone would keep nginx on the self-signed cert.
+    compose.restart()
     ui.info_panel(
         f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
         "Renewal runs automatically twice a day (certbot side-container); "
@@ -214,6 +248,7 @@ def run() -> None:
     if state.deployment_mode == "nginx":
         step_webui(state)
         step_webui_auth(state, project_dir)
+        step_first_client_cert(state, project_dir)
         le = step_letsencrypt(state)
 
     state_mod.save_state(state, project_dir)
@@ -236,7 +271,21 @@ def run() -> None:
     if le is not None:
         setup_letsencrypt(project_dir, state, *le)
     else:
-        docker_cli.Compose(project_dir).up()
+        compose = docker_cli.Compose(project_dir)
+        was_running = _any_running(compose)
+        compose.up()
+        if was_running:
+            # Config files are bind-mounted: when the compose definition is
+            # unchanged, `up` leaves running containers alone and nginx keeps
+            # serving the OLD config — force a restart.
+            compose.restart()
     ui.info_panel("Services started. TeddyCloud generates its server certs on "
                   "first start — export certs/server/ca.der via the certificate "
                   "menu afterwards to flash it onto the box.")
+
+
+def _any_running(compose: docker_cli.Compose) -> bool:
+    try:
+        return any(svc.state == "running" for svc in compose.ps())
+    except docker_cli.DockerError:
+        return False

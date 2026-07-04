@@ -4,7 +4,7 @@ import pytest
 
 from teddycloudhelper import docker_cli, ui, wizard
 from teddycloudhelper import state as state_mod
-from teddycloudhelper.certs import ca, crl, server_certs
+from teddycloudhelper.certs import ca, client_certs, crl, server_certs
 from teddycloudhelper.state import AppState
 
 
@@ -122,6 +122,54 @@ def test_step_webui_auth_keeps_existing_material(tmp_path, monkeypatch):
     assert crl.revoked_serials(tmp_path) == [7]  # CRL not reset
 
 
+def test_step_first_client_cert_issues_and_persists(tmp_path, monkeypatch):
+    ca.create_ca(tmp_path)
+    state = AppState(webui_client_cert_auth=True, next_serial=5)
+    answer_confirm(monkeypatch, True)
+    answer_text(monkeypatch, "admin")
+    monkeypatch.setattr(ui, "ask_password", lambda *a, **kw: "pw")
+    quiet_panels(monkeypatch)
+
+    wizard.step_first_client_cert(state, tmp_path)
+
+    infos = client_certs.list_client_certs(tmp_path)
+    assert [(i.name, i.serial) for i in infos] == [("admin", 5)]
+    assert state.next_serial == 6
+    # serial counter persisted even though run() saves later
+    from teddycloudhelper import state as state_mod
+
+    assert state_mod.load_state(tmp_path).next_serial == 6
+
+
+def test_step_first_client_cert_skips_without_auth(tmp_path, monkeypatch):
+    state = AppState(webui_client_cert_auth=False)
+    monkeypatch.setattr(
+        ui, "confirm", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no prompt"))
+    )
+    wizard.step_first_client_cert(state, tmp_path)  # must not prompt
+
+
+def test_step_first_client_cert_skips_when_certs_exist(tmp_path, monkeypatch):
+    ca.create_ca(tmp_path)
+    client_certs.issue_client_cert(tmp_path, "existing", serial=1, p12_password="pw")
+    state = AppState(webui_client_cert_auth=True)
+    monkeypatch.setattr(
+        ui, "confirm", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no prompt"))
+    )
+    wizard.step_first_client_cert(state, tmp_path)
+
+
+def test_step_first_client_cert_declined(tmp_path, monkeypatch):
+    ca.create_ca(tmp_path)
+    state = AppState(webui_client_cert_auth=True)
+    answer_confirm(monkeypatch, False)
+    quiet_panels(monkeypatch)
+
+    wizard.step_first_client_cert(state, tmp_path)
+
+    assert client_certs.list_client_certs(tmp_path) == []
+
+
 def test_step_letsencrypt_defaults_to_yes_for_public_hostname(monkeypatch):
     state = AppState(webui_hostname="tc.example.com")
     recorded = {}
@@ -172,6 +220,9 @@ class FakeCompose:
     def up(self):
         FakeCompose.calls.append(("up",))
 
+    def restart(self):
+        FakeCompose.calls.append(("restart",))
+
     def run_service(self, service, *args, entrypoint=None):
         FakeCompose.calls.append(("run", service, entrypoint, *args))
         return subprocess.CompletedProcess([], 0, stdout="", stderr="")
@@ -191,7 +242,9 @@ def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
     assert FakeCompose.calls[1][2] == "certbot"  # entrypoint override, or it hangs
     assert "certonly" in FakeCompose.calls[1]
     assert "tc.example.com" in FakeCompose.calls[1]
-    assert FakeCompose.calls[2] == ("up",)
+    # phase 3 must force a restart: nginx.conf is bind-mounted, `up` alone
+    # would leave nginx on the self-signed cert
+    assert FakeCompose.calls[2:] == [("up",), ("restart",)]
     # state persisted with the final TLS mode
     saved = state_mod.load_state(tmp_path)
     assert saved.webui_tls_mode == "letsencrypt"
