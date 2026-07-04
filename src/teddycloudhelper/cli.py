@@ -8,6 +8,7 @@ from rich.panel import Panel
 
 from teddycloudhelper import __version__, ui
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
 
 
@@ -60,7 +61,7 @@ def _dispatch(action: str) -> bool:
     elif action == "docker":
         docker_menu.run()
     elif action == "certs":
-        _placeholder("Certificate management", "v0.3")
+        certs_menu.run()
     elif action in ("security", "backup"):
         _placeholder("This feature", "v0.5")
     return True

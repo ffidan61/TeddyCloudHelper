@@ -1,10 +1,4 @@
-"""Docker services submenu: adopt an existing install, then manage its stack.
-
-Adopting means: point the tool at a directory that already contains a compose
-file, create a fresh ``teddycloudhelper.json`` there if none exists, and set
-the global last-project pointer. No compose file is generated here — that is
-the setup wizard's job (v0.4).
-"""
+"""Docker services submenu for the active project's compose stack."""
 
 from __future__ import annotations
 
@@ -13,7 +7,7 @@ from pathlib import Path
 from rich.table import Table
 
 from teddycloudhelper import docker_cli, ui
-from teddycloudhelper import state as state_mod
+from teddycloudhelper.menus import project as project_menu
 
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Show service status", "status"),
@@ -25,42 +19,6 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Switch / adopt another project", "switch"),
     ("Back to main menu", "back"),
 ]
-
-
-def adopt_project() -> Path | None:
-    """Register a directory with an existing compose file as the active project."""
-    directory = ui.ask_path(
-        "TeddyCloud project directory (must contain a compose file):",
-        must_exist=True,
-    ).resolve()
-    if docker_cli.find_compose_file(directory) is None:
-        ui.error_panel(
-            f"No compose file ({', '.join(docker_cli.COMPOSE_FILENAMES)}) "
-            f"found in {directory}."
-        )
-        return None
-    if not state_mod.has_state(directory):
-        if not ui.confirm(
-            f"No {state_mod.STATE_FILENAME} here yet. "
-            "Register this directory as a TeddyCloudHelper project?",
-            default=True,
-        ):
-            return None
-        state_mod.save_state(state_mod.AppState(), directory)
-    state_mod.save_last_project(directory)
-    return directory
-
-
-def _active_project() -> Path | None:
-    """Reuse the last project if it still has a compose file, else adopt one."""
-    last = state_mod.load_last_project()
-    if last is not None and docker_cli.find_compose_file(last) is not None:
-        return last
-    ui.info_panel(
-        "No usable project yet — pick a directory with an existing "
-        "TeddyCloud compose file."
-    )
-    return adopt_project()
 
 
 def _print_status(compose: docker_cli.Compose) -> None:
@@ -101,13 +59,13 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
             compose.restart()
             _print_status(compose)
     elif action == "switch":
-        return adopt_project()
+        return project_menu.adopt_project()
     return None
 
 
 def run() -> None:
     """Submenu loop. Mirrors the main loop: errors render red and never crash."""
-    project = _active_project()
+    project = project_menu.active_project()
     if project is None:
         return
     while True:

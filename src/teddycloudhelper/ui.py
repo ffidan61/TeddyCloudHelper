@@ -50,6 +50,10 @@ def ask_text(message: str, default: str = "") -> str:
     return _ask(questionary.text(message, default=default))
 
 
+def ask_password(message: str) -> str:
+    return _ask(questionary.password(message))
+
+
 def ask_path(message: str, default: str = "", must_exist: bool = False) -> Path:
     def validate(value: str) -> bool | str:
         if not value.strip():

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from teddycloudhelper import state, ui
-from teddycloudhelper.menus import docker as docker_menu
+from teddycloudhelper.menus import project as project_menu
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,7 @@ def test_adopt_registers_new_project(project, monkeypatch):
     answer_path(monkeypatch, project)
     answer_confirm(monkeypatch, True)
 
-    assert docker_menu.adopt_project() == project.resolve()
+    assert project_menu.adopt_project() == project.resolve()
 
     assert state.has_state(project)
     assert state.load_state(project) == state.AppState()
@@ -43,7 +43,7 @@ def test_adopt_without_compose_file(tmp_path, monkeypatch):
     empty.mkdir()
     answer_path(monkeypatch, empty)
 
-    assert docker_menu.adopt_project() is None
+    assert project_menu.adopt_project() is None
     assert not state.has_state(empty)
     assert state.load_last_project() is None
 
@@ -52,7 +52,7 @@ def test_adopt_declined_registration(project, monkeypatch):
     answer_path(monkeypatch, project)
     answer_confirm(monkeypatch, False)
 
-    assert docker_menu.adopt_project() is None
+    assert project_menu.adopt_project() is None
     assert not state.has_state(project)
     assert state.load_last_project() is None
 
@@ -67,13 +67,13 @@ def test_adopt_existing_state_needs_no_confirm(project, monkeypatch):
 
     monkeypatch.setattr(ui, "confirm", fail_confirm)
 
-    assert docker_menu.adopt_project() == project.resolve()
+    assert project_menu.adopt_project() == project.resolve()
     assert state.load_state(project) == existing  # existing state untouched
 
 
 def test_active_project_reuses_last(project):
     state.save_last_project(project)
-    assert docker_menu._active_project() == project.resolve()
+    assert project_menu.active_project() == project.resolve()
 
 
 def test_active_project_falls_back_to_adopt(tmp_path, project, monkeypatch):
@@ -83,4 +83,4 @@ def test_active_project_falls_back_to_adopt(tmp_path, project, monkeypatch):
     answer_path(monkeypatch, project)
     answer_confirm(monkeypatch, True)
 
-    assert docker_menu._active_project() == project.resolve()
+    assert project_menu.active_project() == project.resolve()
