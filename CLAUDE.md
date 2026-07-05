@@ -81,7 +81,10 @@ src/teddycloudhelper/
 ├── security.py    # (v0.5) htpasswd (bcrypt), IP allowlist (stdlib ipaddress)
 ├── wizard.py      # (v0.4) setup wizard as a list of testable step functions
 ├── render.py      # (v0.4) Jinja2 env, render-to-file with .bak
-├── backup.py      # (v0.5) tar.gz backup/restore (config + certs, NEVER audio content)
+├── backup.py      # (v0.5) tar.gz backup/restore (config + certs + firmware dumps,
+│                  #        NEVER audio content)
+├── doctor.py      # (v0.7) health checks (containers, ports, box-TLS on 443, WebUI,
+│                  #        DNS, box certs, LE expiry) via injectable Probes seam
 ├── menus/         # per-topic submenus
 └── templates/     # *.j2 for compose + nginx (shared-443 SNI split / separate WebUI port)
 ```
@@ -91,4 +94,5 @@ src/teddycloudhelper/
 v0.1 skeleton → v0.2 Docker management (adopt existing installs) → v0.3 certificates
 (own CA, WebUI client certs issue/renew/revoke + CRL for nginx, PKCS#12 export, dumped
 box-cert handling, ca.der export) → v0.4 setup wizard + templates → v0.5 security +
-backup → v0.6+ Let's Encrypt for the WebUI hostname, PyPI release.
+backup → v0.6 Let's Encrypt for the WebUI hostname → v0.7 health check ("doctor").
+No PyPI release for now — installation via git URL.

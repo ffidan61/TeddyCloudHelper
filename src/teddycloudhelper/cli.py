@@ -14,6 +14,7 @@ from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import backup as backup_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
+from teddycloudhelper.menus import doctor as doctor_menu
 from teddycloudhelper.menus import security as security_menu
 
 
@@ -53,6 +54,7 @@ def _warn_expiring_cert(project: Path) -> None:
 
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Set up a new TeddyCloud project", "wizard"),
+    ("Health check (doctor)", "doctor"),
     ("Manage Docker services", "docker"),
     ("Manage certificates", "certs"),
     ("Security (Basic Auth, IP allowlist)", "security"),
@@ -67,6 +69,8 @@ def _dispatch(action: str) -> bool:
         return False
     if action == "wizard":
         wizard.run()
+    elif action == "doctor":
+        doctor_menu.run()
     elif action == "docker":
         docker_menu.run()
     elif action == "certs":
