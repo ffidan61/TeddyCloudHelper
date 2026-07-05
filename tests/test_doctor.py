@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
@@ -20,13 +20,16 @@ def make_probes(**overrides) -> doctor.Probes:
         ps=lambda: [ServiceStatus("teddycloud", "teddycloud", "running", "Up")],
         listening=lambda port: True,
         tls_cert=lambda port, sni: make_cert("TeddyCloud", "TeddyCloud CA"),
-        http_get=lambda port, sni, host: 200,
+        http_get=lambda port, sni, host, path: (200, "<html>teddycloud</html>"),
         resolve=lambda host: ["192.168.1.10"],
+        getboxes=lambda: '{"boxes":[{"ID":"1","commonName":"001122334455","boxName":"Kids"}]}',
     )
     return doctor.Probes(**(defaults | overrides))
 
 
-def make_cert(subject_cn: str, issuer_cn: str, issuer_org: str | None = None):
+def make_cert(
+    subject_cn: str, issuer_cn: str, issuer_org: str | None = None, days: int = 90
+):
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)])
     issuer_attrs = [x509.NameAttribute(NameOID.COMMON_NAME, issuer_cn)]
@@ -39,8 +42,8 @@ def make_cert(subject_cn: str, issuer_cn: str, issuer_org: str | None = None):
         .issuer_name(x509.Name(issuer_attrs))
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
-        .not_valid_after(now + timedelta(days=90))
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=days))
         .sign(key, hashes.SHA256())
     )
 
@@ -172,9 +175,9 @@ def test_box_tls_connection_refused_fails():
 def test_webui_endpoint_per_mode(state, expected_port, expected_sni):
     seen = []
 
-    def http_get(port, sni, host):
+    def http_get(port, sni, host, path):
         seen.append((port, sni))
-        return 200
+        return 200, ""
 
     result = doctor.check_webui(state, make_probes(http_get=http_get))
     assert result.status == "ok"
@@ -182,22 +185,38 @@ def test_webui_endpoint_per_mode(state, expected_port, expected_sni):
 
 
 def test_webui_502_is_warning():
-    result = doctor.check_webui(AppState(), make_probes(http_get=lambda *a: 502))
+    result = doctor.check_webui(AppState(), make_probes(http_get=lambda *a: (502, "")))
     assert result.status == "warn"
     assert "502" in result.detail
 
 
 def test_webui_401_ok_with_basic_auth():
-    probes = make_probes(http_get=lambda *a: 401)
+    probes = make_probes(http_get=lambda *a: (401, ""))
     assert doctor.check_webui(AppState(basic_auth_enabled=True), probes).status == "ok"
     assert doctor.check_webui(AppState(), probes).status == "warn"
 
 
 def test_webui_400_ok_with_client_cert_auth():
     # nginx answers 400 when ssl_verify_client is on and no cert was sent.
-    probes = make_probes(http_get=lambda *a: 400)
+    probes = make_probes(http_get=lambda *a: (400, ""))
     state = AppState(webui_client_cert_auth=True)
     assert doctor.check_webui(state, probes).status == "ok"
+    assert doctor.check_webui(AppState(), probes).status == "warn"
+
+
+def test_webui_detects_security_mitigation_lock():
+    # TeddyCloud's lock answers 200 with a plaintext message — the status
+    # code alone would report a healthy WebUI while the boxes are cut off.
+    body = "TeddyCloud has been locked to mitigate security risks! Please check the logs"
+    probes = make_probes(http_get=lambda *a: (200, body))
+    result = doctor.check_webui(AppState(), probes)
+    assert result.status == "fail"
+    assert "LOCKED" in result.detail
+
+
+def test_webui_detects_security_warning():
+    body = "TeddyCloud has detected security risks! Please check the logs"
+    probes = make_probes(http_get=lambda *a: (200, body))
     assert doctor.check_webui(AppState(), probes).status == "warn"
 
 
@@ -293,15 +312,87 @@ def test_files_nginx_mode_needs_nginx_conf(tmp_path):
     assert doctor.check_files(tmp_path, state).status == "ok"
 
 
+LE_STATE = AppState(
+    deployment_mode="nginx",
+    webui_hostname="tc.example.com",
+    webui_tls_mode="letsencrypt",
+)
+
+
+def _write_le_cert(tmp_path, days: int) -> None:
+    live = tmp_path / "letsencrypt" / "live" / "tc.example.com"
+    live.mkdir(parents=True)
+    cert = make_cert("tc.example.com", "R11", issuer_org="Let's Encrypt", days=days)
+    (live / "fullchain.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+
 def test_letsencrypt_missing_cert_warns(tmp_path):
-    state = AppState(
-        deployment_mode="nginx",
-        webui_hostname="tc.example.com",
-        webui_tls_mode="letsencrypt",
-    )
-    result = doctor.check_letsencrypt(tmp_path, state)
+    result = doctor.check_letsencrypt(tmp_path, LE_STATE, make_probes())
     assert result.status == "warn"
     assert "no certificate" in result.detail.lower()
+
+
+def test_letsencrypt_valid_cert_ok(tmp_path):
+    _write_le_cert(tmp_path, days=60)
+    result = doctor.check_letsencrypt(tmp_path, LE_STATE, make_probes())
+    assert result.status == "ok"
+
+
+def test_letsencrypt_expiring_cert_warns(tmp_path):
+    _write_le_cert(tmp_path, days=10)
+    result = doctor.check_letsencrypt(tmp_path, LE_STATE, make_probes())
+    assert result.status == "warn"
+    assert "renews at 30 days" in result.detail
+
+
+def test_letsencrypt_expired_cert_fails(tmp_path):
+    _write_le_cert(tmp_path, days=-1)
+    result = doctor.check_letsencrypt(tmp_path, LE_STATE, make_probes())
+    assert result.status == "fail"
+    assert "EXPIRED" in result.detail
+
+
+def test_letsencrypt_falls_back_to_live_cert(tmp_path, monkeypatch):
+    # ./letsencrypt is typically root-owned — the check must degrade to the
+    # certificate nginx actually serves instead of demanding sudo.
+    from teddycloudhelper.certs import letsencrypt as le_mod
+    from teddycloudhelper.certs.ca import CertError
+
+    def denied(*args, **kwargs):
+        raise CertError("permission denied")
+
+    monkeypatch.setattr(le_mod, "cert_expiry", denied)
+    probes = make_probes(
+        tls_cert=lambda port, sni: make_cert("tc.example.com", "R11", days=60)
+    )
+    result = doctor.check_letsencrypt(tmp_path, LE_STATE, probes)
+    assert result.status == "ok"
+    assert "live WebUI certificate" in result.detail
+
+
+# --- known boxes -------------------------------------------------------------------
+
+
+def test_boxes_listed_ok():
+    result = doctor.check_boxes(make_probes())
+    assert result.status == "ok"
+    assert "Kids" in result.detail
+
+
+def test_boxes_none_warns():
+    result = doctor.check_boxes(make_probes(getboxes=lambda: '{"boxes":[]}'))
+    assert result.status == "warn"
+    assert "no box" in result.detail.lower()
+
+
+def test_boxes_query_failure_warns():
+    probes = make_probes(getboxes=_raise(docker_cli.DockerError("container not running")))
+    assert doctor.check_boxes(probes).status == "warn"
+
+
+def test_boxes_garbage_answer_warns():
+    probes = make_probes(getboxes=lambda: "<html>404</html>")
+    assert doctor.check_boxes(probes).status == "warn"
 
 
 # --- run_checks -----------------------------------------------------------------

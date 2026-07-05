@@ -15,6 +15,7 @@ connecting.
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
 import ssl
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 
 from teddycloudhelper import docker_cli, ports
+from teddycloudhelper.certs import ca as ca_mod
 from teddycloudhelper.certs import letsencrypt
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.state import AppState
@@ -53,8 +55,12 @@ class Probes:
     ps: Callable[[], list[docker_cli.ServiceStatus]]
     listening: Callable[[int], bool]
     tls_cert: Callable[[int, str | None], x509.Certificate]
-    http_get: Callable[[int, str | None, str], int]
+    # (port, sni, host_header, path) -> (status, body head)
+    http_get: Callable[[int, str | None, str, str], tuple[int, str]]
     resolve: Callable[[str], list[str]]
+    # Raw JSON of /api/getBoxes, queried inside the container so neither
+    # nginx routing nor WebUI auth can get in the way.
+    getboxes: Callable[[], str]
 
 
 # --- default (real) probe implementations ------------------------------------
@@ -82,25 +88,30 @@ def _tls_cert(port: int, server_name: str | None) -> x509.Certificate:
     return x509.load_der_x509_certificate(der)
 
 
-def _http_get(port: int, server_name: str | None, host_header: str) -> int:
-    """Status code of ``GET /`` over TLS. Raw socket instead of urllib so the
-    SNI (routing) and the Host header can differ from the connect address."""
-    request = f"GET / HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\n\r\n"
+def _http_get(
+    port: int, server_name: str | None, host_header: str, path: str = "/"
+) -> tuple[int, str]:
+    """Status code + body head of a ``GET`` over TLS. Raw socket instead of
+    urllib so the SNI (routing) and the Host header can differ from the
+    connect address."""
+    request = f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\nConnection: close\r\n\r\n"
     with (
         socket.create_connection(("127.0.0.1", port), timeout=_PROBE_TIMEOUT) as raw,
         _tls_context().wrap_socket(raw, server_hostname=server_name) as tls,
     ):
         tls.sendall(request.encode("ascii"))
         data = b""
-        while b"\r\n" not in data and len(data) < 1024:
-            chunk = tls.recv(256)
+        while len(data) < 8192:
+            chunk = tls.recv(1024)
             if not chunk:
                 break
             data += chunk
     try:
-        return int(data.split(b"\r\n", 1)[0].split()[1])
+        status = int(data.split(b"\r\n", 1)[0].split()[1])
     except (IndexError, ValueError):
         raise OSError(f"no HTTP status line in response: {data[:80]!r}") from None
+    body = data.partition(b"\r\n\r\n")[2]
+    return status, body[:2048].decode("utf-8", "replace")
 
 
 def _resolve(hostname: str) -> list[str]:
@@ -109,12 +120,22 @@ def _resolve(hostname: str) -> list[str]:
 
 
 def default_probes(project_dir: Path) -> Probes:
+    compose = docker_cli.Compose(project_dir)
+
+    def getboxes() -> str:
+        # curl is installed in the teddycloud image; querying inside the
+        # container bypasses nginx routing and any WebUI auth.
+        return compose.exec_service(
+            "teddycloud", "curl", "-s", "http://localhost:80/api/getBoxes"
+        ).stdout
+
     return Probes(
-        ps=docker_cli.Compose(project_dir).ps,
+        ps=compose.ps,
         listening=_listening,
         tls_cert=_tls_cert,
         http_get=_http_get,
         resolve=_resolve,
+        getboxes=getboxes,
     )
 
 
@@ -203,7 +224,7 @@ def check_webui(state: AppState, probes: Probes) -> CheckResult:
     name = "WebUI"
     where = f"127.0.0.1:{port}" + (f" (SNI {sni})" if sni else "")
     try:
-        status = probes.http_get(port, sni, sni or "localhost")
+        status, body = probes.http_get(port, sni, sni or "localhost", "/")
     except ssl.SSLError as exc:
         if state.webui_client_cert_auth:
             return CheckResult(
@@ -215,6 +236,23 @@ def check_webui(state: AppState, probes: Probes) -> CheckResult:
         return CheckResult(name, "fail", f"TLS handshake with {where} failed: {exc}")
     except OSError as exc:
         return CheckResult(name, "fail", f"{where} is not reachable: {exc}")
+    # TeddyCloud's security mitigation answers with these texts (and cuts
+    # off the boxes too) once internet scanners have reached it.
+    if "locked to mitigate security risks" in body:
+        return CheckResult(
+            name,
+            "fail",
+            "TeddyCloud has LOCKED itself (security mitigation) — the boxes "
+            "are cut off too. Enable Basic Auth, client certificates or the "
+            "IP allowlist, then restart the services to clear the lock.",
+        )
+    if "detected security risks" in body:
+        return CheckResult(
+            name,
+            "warn",
+            "TeddyCloud reports detected security risks — check the "
+            "teddycloud logs and protect the WebUI before it locks itself.",
+        )
     if status == 401 and state.basic_auth_enabled:
         return CheckResult(name, "ok", f"Answers on {where}; Basic Auth is enforced (401).")
     if status == 400 and state.webui_client_cert_auth:
@@ -296,20 +334,82 @@ def check_box_certs(project_dir: Path) -> CheckResult:
     )
 
 
-def check_letsencrypt(project_dir: Path, state: AppState) -> CheckResult:
+def check_letsencrypt(project_dir: Path, state: AppState, probes: Probes) -> CheckResult:
     name = "Let's Encrypt"
-    warning = letsencrypt.renewal_warning(project_dir, state)
-    if warning:
-        return CheckResult(name, "warn", warning)
+    source = ""
     try:
         expiry = letsencrypt.cert_expiry(project_dir, state.webui_hostname)
-    except CertError as exc:
-        return CheckResult(name, "warn", str(exc))
-    if expiry is None:  # pragma: no cover - renewal_warning already caught this
-        return CheckResult(name, "warn", "No certificate found.")
+    except CertError:
+        # ./letsencrypt is typically root-owned (certbot runs as root in its
+        # container) — read the certificate nginx actually serves instead.
+        port, sni = _webui_endpoint(state)
+        try:
+            expiry = probes.tls_cert(port, sni).not_valid_after_utc
+        except OSError as exc:
+            return CheckResult(
+                name,
+                "warn",
+                "Cannot read the certificate file (root-owned ./letsencrypt?) "
+                f"and probing the live WebUI certificate failed too: {exc}",
+            )
+        source = " (read from the live WebUI certificate)"
+    if expiry is None:
+        return CheckResult(
+            name,
+            "warn",
+            "Let's Encrypt mode is active but no certificate was found — "
+            "re-run the Let's Encrypt setup from the certificate menu.",
+        )
+    days = (expiry - ca_mod.utcnow()).days
+    if days < 0:
+        return CheckResult(
+            name,
+            "fail",
+            f"The certificate for {state.webui_hostname} EXPIRED {-days} "
+            "day(s) ago — automatic renewal is broken; check "
+            "`docker compose logs certbot`.",
+        )
+    if days <= letsencrypt.RENEWAL_WARN_DAYS:
+        return CheckResult(
+            name,
+            "warn",
+            f"The certificate for {state.webui_hostname} expires in {days} "
+            "day(s); certbot renews at 30 days remaining, so automatic "
+            "renewal seems to be failing.",
+        )
     return CheckResult(
-        name, "ok", f"Certificate for {state.webui_hostname} valid until {expiry:%Y-%m-%d}."
+        name,
+        "ok",
+        f"Certificate for {state.webui_hostname} valid until "
+        f"{expiry:%Y-%m-%d}{source}.",
     )
+
+
+def check_boxes(probes: Probes) -> CheckResult:
+    """Which boxes TeddyCloud knows — the end-to-end proof a box connected."""
+    name = "Known boxes"
+    try:
+        raw = probes.getboxes()
+    except docker_cli.DockerError as exc:
+        return CheckResult(name, "warn", f"Could not query /api/getBoxes: {exc}")
+    try:
+        boxes = json.loads(raw)["boxes"]
+    except (ValueError, KeyError, TypeError):
+        return CheckResult(
+            name, "warn", f"Unexpected /api/getBoxes answer: {raw[:120]!r}"
+        )
+    if not boxes:
+        return CheckResult(
+            name,
+            "warn",
+            "TeddyCloud knows no boxes yet — no box has ever connected (or "
+            "been configured). Check DNS/CA flashing if one should have.",
+        )
+    listing = ", ".join(
+        f"{box.get('boxName') or '?'} ({box.get('commonName') or box.get('ID', '?')})"
+        for box in boxes
+    )
+    return CheckResult(name, "ok", f"{len(boxes)} box(es): {listing}.")
 
 
 def check_webui_protection(state: AppState) -> CheckResult:
@@ -366,7 +466,8 @@ def run_checks(
         check_webui_protection(state),
         check_box_dns(probes),
         check_box_certs(project_dir),
+        check_boxes(probes),
     ]
     if state.webui_tls_mode == "letsencrypt":
-        results.append(check_letsencrypt(project_dir, state))
+        results.append(check_letsencrypt(project_dir, state, probes))
     return results
