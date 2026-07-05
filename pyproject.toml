@@ -1,6 +1,6 @@
 [project]
 name = "teddycloudhelper"
-version = "0.9.3"
+version = "0.9.4"
 description = "Interactive, menu-driven CLI toolkit to set up and manage a self-hosted TeddyCloud server"
 readme = "README.md"
 license = { file = "LICENSE" }

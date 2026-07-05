@@ -139,6 +139,16 @@ def test_nginx_allows_large_uploads_and_websockets():
         assert "proxy_set_header Upgrade $http_upgrade;" in text
 
 
+def test_nginx_slow_upload_and_sse_friendly():
+    # TeddyCloud needs minutes for big uploads (ESP32 dumps); the 60s
+    # defaults produced 502/504. SSE needs unbuffered responses.
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        assert "proxy_read_timeout 600s;" in text
+        assert "proxy_send_timeout 600s;" in text
+        assert "proxy_buffering off;" in text
+
+
 def test_nginx_client_cert_auth_off_by_default():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
     assert "ssl_verify_client" not in text
