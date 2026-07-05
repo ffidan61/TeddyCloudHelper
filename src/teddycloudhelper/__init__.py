@@ -1,3 +1,3 @@
 """TeddyCloudHelper — interactive CLI toolkit to set up and manage a TeddyCloud server."""
 
-__version__ = "0.9.11"
+__version__ = "0.9.12"

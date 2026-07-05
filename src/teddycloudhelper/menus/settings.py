@@ -143,6 +143,12 @@ def run() -> None:
     project = project_menu.active_project()
     if project is None:
         return
+    # Show the current values up front — deciding what to change starts
+    # with knowing what is set.
+    try:
+        _show(state_mod.load_state(project), project)
+    except state_mod.StateError as exc:
+        ui.error_panel(str(exc), title="Settings error")
     while True:
         ui.console.print(f"Active project: [bold]{project}[/bold]")
         try:
