@@ -47,6 +47,10 @@ uv run pytest tests/test_state.py::test_save_then_load_roundtrip   # single test
   (`proxy_request_buffering off`), never buffer them.
 - TeddyCloud serves web routes on ports 80/8443 only; **port 443 is an API-only listener**
   (`api_access_only`) that answers all WebUI/API-web routes with 404 "File not found".
+- **The box fetches the time over plain HTTP (`/v1/time`, port 80) BEFORE its first TLS
+  handshake** — certificate validation needs a correct clock. Port 80 must therefore
+  proxy `/v1/` to TeddyCloud; a redirect there bricks the box boot sequence (Codewort
+  "Eule" right after Wi-Fi connects).
 
 ## Architecture
 

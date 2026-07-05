@@ -58,12 +58,20 @@ http {
         '' close;
     }
 
-    # Plain HTTP: ACME challenges only, everything else is redirected to
-    # the TLS WebUI. NEVER proxied to TeddyCloud — unauthenticated internet
-    # noise (crawlers, /.env scanners) reaching TeddyCloud triggers its
-    # security-mitigation lock, which also cuts off the boxes.
+    # Plain HTTP: box API + ACME challenges only, everything else is
+    # redirected to the TLS WebUI. The web GUI is NEVER proxied here —
+    # unauthenticated internet noise (crawlers, /.env scanners) reaching
+    # TeddyCloud triggers its security-mitigation lock, which also cuts
+    # off the boxes.
     server {
         listen 80;
+        # The box fetches the time over plain HTTP (/v1/time) BEFORE its
+        # first TLS handshake — certificate validation needs a correct
+        # clock. A redirect here bricks the box's boot sequence.
+        location /v1/ {
+            proxy_pass http://teddycloud:80;
+            proxy_set_header Host $host;
+        }
         # ACME HTTP-01 challenge — must stay reachable for everyone.
         location /.well-known/acme-challenge/ {
             root /var/www/certbot;

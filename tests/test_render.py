@@ -213,11 +213,24 @@ def test_nginx_port80_never_reaches_teddycloud():
     }
     text = render.render_template("nginx.conf.j2", context)
     port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
-    assert "proxy_pass" not in port80
     assert "auth_basic " not in port80
     assert "deny" not in port80
     assert "location /.well-known/acme-challenge/" in port80
     assert "return 301 https://$host:8443$request_uri;" in port80
+    # Only the box API may be proxied on port 80 — never the web GUI.
+    assert port80.count("proxy_pass") == 1
+    assert "location /v1/" in port80
+
+
+def test_nginx_port80_serves_box_time_endpoint():
+    # The box fetches /v1/time over plain HTTP before its first TLS
+    # handshake (cert validation needs a correct clock) — a redirect
+    # bricks the box boot sequence (seen in prod 2026-07).
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
+        assert "location /v1/" in port80
+        assert "proxy_pass http://teddycloud:80;" in port80
 
 
 def test_nginx_port80_redirect_targets_webui_port():
