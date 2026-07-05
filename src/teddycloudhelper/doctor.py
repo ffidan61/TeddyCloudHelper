@@ -20,14 +20,15 @@ import socket
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 
-from teddycloudhelper import docker_cli, ports
+from teddycloudhelper import backup, docker_cli, ports
 from teddycloudhelper.certs import ca as ca_mod
-from teddycloudhelper.certs import letsencrypt
+from teddycloudhelper.certs import letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.state import AppState
 
@@ -37,6 +38,9 @@ BOX_HOSTNAME = "prod.de.tbs.toys"
 # The original certs dumped from the box (TeddyCloud's client identity
 # against the real Boxine cloud).
 BOX_CERT_FILES = ("ca.der", "client.der", "private.der")
+
+# Nag when the newest backup is older than this.
+BACKUP_WARN_DAYS = 30
 
 _PROBE_TIMEOUT = 5.0
 
@@ -385,6 +389,62 @@ def check_letsencrypt(project_dir: Path, state: AppState, probes: Probes) -> Che
     )
 
 
+def check_ca_identity(project_dir: Path, state: AppState) -> CheckResult:
+    """The box CA must never change silently — flashed boxes trust exactly
+    this CA. Records the fingerprint on first sight (caller saves state)."""
+    name = "Server CA"
+    fingerprint = server_certs.box_ca_fingerprint(project_dir)
+    if fingerprint is None:
+        return CheckResult(
+            name,
+            "warn",
+            "certs/server/ca.der does not exist yet — TeddyCloud generates "
+            "it on first container start.",
+        )
+    ca = server_certs.load_box_ca(project_dir)
+    identity = f"serial {ca.serial_number:x}, SHA-256 {fingerprint[:16]}…"
+    if not state.known_ca_fingerprint:
+        state.known_ca_fingerprint = fingerprint
+        return CheckResult(name, "ok", f"Recorded the box CA ({identity}).")
+    if state.known_ca_fingerprint != fingerprint:
+        return CheckResult(
+            name,
+            "fail",
+            f"The box CA CHANGED since it was last recorded ({identity}) — "
+            "every box flashed against the old CA now fails its TLS "
+            "handshake. Restore certs/server/ from a backup, or re-flash "
+            "the boxes and accept the new CA when asked.",
+        )
+    return CheckResult(name, "ok", f"Unchanged ({identity}).")
+
+
+def check_backup(project_dir: Path) -> CheckResult:
+    """certs/ (box CA + dumped box certs) is irreplaceable — remind."""
+    name = "Backup"
+    backups = backup.list_backups(project_dir)
+    if not backups:
+        return CheckResult(
+            name,
+            "warn",
+            "No backup exists yet — certs/ (box CA + dumped box certs) is "
+            "irreplaceable. Create one via the backup menu.",
+        )
+    age_days = (
+        ca_mod.utcnow()
+        - datetime.fromtimestamp(backups[0].stat().st_mtime, tz=UTC)
+    ).days
+    if age_days > BACKUP_WARN_DAYS:
+        return CheckResult(
+            name,
+            "warn",
+            f"The latest backup is {age_days} day(s) old — create a fresh "
+            "one via the backup menu.",
+        )
+    return CheckResult(
+        name, "ok", f"Latest backup is {age_days} day(s) old ({backups[0].name})."
+    )
+
+
 def check_boxes(probes: Probes) -> CheckResult:
     """Which boxes TeddyCloud knows — the end-to-end proof a box connected."""
     name = "Known boxes"
@@ -465,9 +525,11 @@ def run_checks(
         check_webui(state, probes),
         check_webui_protection(state),
         check_box_dns(probes),
+        check_ca_identity(project_dir, state),
         check_box_certs(project_dir),
         check_boxes(probes),
     ]
     if state.webui_tls_mode == "letsencrypt":
         results.append(check_letsencrypt(project_dir, state, probes))
+    results.append(check_backup(project_dir))
     return results

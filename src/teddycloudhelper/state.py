@@ -69,6 +69,9 @@ class AppState:
     ip_allowlist: list[str] = field(default_factory=list)
     # Monotone serial counter for issued client certificates.
     next_serial: int = 1
+    # SHA-256 of certs/server/ca.der when last seen — flashed boxes trust
+    # exactly this CA, so a change must never go unnoticed (doctor check).
+    known_ca_fingerprint: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> AppState:

@@ -275,6 +275,81 @@ def test_webui_protection_any_mechanism_ok(state):
     assert doctor.check_webui_protection(state).status == "ok"
 
 
+# --- CA identity / backup ---------------------------------------------------------
+
+
+def _install_ca(tmp_path, cert):
+    ca_dir = tmp_path / "certs" / "server"
+    ca_dir.mkdir(parents=True, exist_ok=True)
+    (ca_dir / "ca.der").write_bytes(cert.public_bytes(serialization.Encoding.DER))
+
+
+def test_ca_identity_records_on_first_sight(tmp_path):
+    _install_ca(tmp_path, make_cert("TeddyCloud CA Root Cert.", "TeddyCloud CA Root Cert."))
+    state = AppState()
+
+    result = doctor.check_ca_identity(tmp_path, state)
+
+    assert result.status == "ok"
+    assert state.known_ca_fingerprint  # recorded
+
+
+def test_ca_identity_unchanged_ok(tmp_path):
+    _install_ca(tmp_path, make_cert("CA", "CA"))
+    state = AppState()
+    doctor.check_ca_identity(tmp_path, state)  # record
+
+    assert doctor.check_ca_identity(tmp_path, state).status == "ok"
+
+
+def test_ca_identity_change_fails(tmp_path):
+    # The prod incident: regenerated certs mid-day silently broke every
+    # flashed box. This must scream.
+    _install_ca(tmp_path, make_cert("CA", "CA"))
+    state = AppState()
+    doctor.check_ca_identity(tmp_path, state)
+    _install_ca(tmp_path, make_cert("CA", "CA"))  # new key, same name
+
+    result = doctor.check_ca_identity(tmp_path, state)
+
+    assert result.status == "fail"
+    assert "CHANGED" in result.detail
+
+
+def test_ca_identity_missing_ca_warns(tmp_path):
+    assert doctor.check_ca_identity(tmp_path, AppState()).status == "warn"
+
+
+def test_backup_none_warns(tmp_path):
+    result = doctor.check_backup(tmp_path)
+    assert result.status == "warn"
+    assert "irreplaceable" in result.detail
+
+
+def test_backup_fresh_ok(tmp_path):
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    (backups / "teddycloudhelper-backup-20260705-120000.tar.gz").write_bytes(b"x")
+    assert doctor.check_backup(tmp_path).status == "ok"
+
+
+def test_backup_stale_warns(tmp_path):
+    import os
+    import time
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    path = backups / "teddycloudhelper-backup-20260101-120000.tar.gz"
+    path.write_bytes(b"x")
+    old = time.time() - 60 * 86400
+    os.utime(path, (old, old))
+
+    result = doctor.check_backup(tmp_path)
+
+    assert result.status == "warn"
+    assert "60 day(s) old" in result.detail
+
+
 # --- box certs / files / letsencrypt ---------------------------------------------
 
 
@@ -421,6 +496,9 @@ def test_run_checks_healthy_project_all_ok(tmp_path):
     client_dir.mkdir(parents=True)
     for name in doctor.BOX_CERT_FILES:
         (client_dir / name).write_bytes(b"x")
+    _install_ca(tmp_path, make_cert("CA", "CA"))
+    (tmp_path / "backups").mkdir()
+    (tmp_path / "backups" / "teddycloudhelper-backup-20260705-120000.tar.gz").write_bytes(b"x")
     results = doctor.run_checks(tmp_path, AppState(basic_auth_enabled=True), make_probes())
     assert all(r.status == "ok" for r in results), [
         (r.name, r.detail) for r in results if r.status != "ok"

@@ -6,6 +6,7 @@ from rich.table import Table
 
 from teddycloudhelper import doctor, ui
 from teddycloudhelper import state as state_mod
+from teddycloudhelper.certs import server_certs
 from teddycloudhelper.menus import project as project_menu
 
 _STYLES = {"ok": "green", "warn": "yellow", "fail": "red"}
@@ -22,6 +23,8 @@ def run() -> None:
         return
     ui.console.print(f"Checking [bold]{project}[/bold]…")
     results = doctor.run_checks(project, state)
+    # check_ca_identity records the fingerprint on first sight.
+    state_mod.save_state(state, project)
 
     table = Table(title="Health check")
     table.add_column("Check")
@@ -43,3 +46,26 @@ def run() -> None:
         ui.info_panel(f"No failures, {warned} warning(s) — see the table above.")
     else:
         ui.info_panel("Everything looks healthy.")
+
+    _offer_ca_acceptance(project, state)
+
+
+def _offer_ca_acceptance(project, state) -> None:
+    """After a CA-change failure: let the user accept the new CA as known
+    (only sensible when the change was intentional and boxes are re-flashed)."""
+    current = server_certs.box_ca_fingerprint(project)
+    if (
+        current is None
+        or not state.known_ca_fingerprint
+        or state.known_ca_fingerprint == current
+    ):
+        return
+    if ui.confirm(
+        "Accept the CURRENT box CA as the known one? Only do this if the "
+        "change was intentional — boxes flashed against the old CA stay "
+        "broken until re-flashed.",
+        default=False,
+    ):
+        state.known_ca_fingerprint = current
+        state_mod.save_state(state, project)
+        ui.info_panel("New box CA recorded.")

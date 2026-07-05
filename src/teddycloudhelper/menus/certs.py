@@ -8,7 +8,15 @@ from rich.table import Table
 
 from teddycloudhelper import docker_cli, ui, wizard
 from teddycloudhelper import state as state_mod
-from teddycloudhelper.certs import box_certs, ca, client_certs, crl, letsencrypt, server_certs
+from teddycloudhelper.certs import (
+    box_certs,
+    ca,
+    client_certs,
+    crl,
+    firmware,
+    letsencrypt,
+    server_certs,
+)
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import project as project_menu
 
@@ -21,6 +29,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Set up Let's Encrypt for the WebUI", "letsencrypt"),
     ("Renew Let's Encrypt certificate now", "le_renew"),
     ("Export box CA (ca.der) for flashing", "export_ca"),
+    ("Check a patched firmware image (CA match)", "fw_check"),
     ("Install dumped box certificates", "box_certs"),
     ("Back to main menu", "back"),
 ]
@@ -147,6 +156,49 @@ def _export_ca(project: Path) -> None:
     )
 
 
+def _fw_check(project: Path) -> None:
+    """Verify a patched image BEFORE flashing — an image patched by another
+    instance produces nothing but silent TLS handshake failures."""
+    image = ui.ask_path("Path to the patched firmware image (.bin):", must_exist=True)
+    result = firmware.check_image(project, image)
+    lines = [f"Certificates found in the image: {len(result.certificates)}"]
+    for cert in result.certificates:
+        cn = cert.subject.rfc4514_string()
+        lines.append(f"  • {cn} (serial {cert.serial_number:x})")
+    lines.append("")
+    if result.box_cert_cn:
+        lines.append(f"Boxine box certificate: [green]present[/green] ({result.box_cert_cn})")
+    else:
+        lines.append(
+            "Boxine box certificate: [red]MISSING[/red] — this does not look "
+            "like a complete patched box image."
+        )
+    if result.ca_match:
+        ui.info_panel(
+            "\n".join(lines)
+            + "\n\nThe embedded CA matches this instance "
+            f"(serial {result.instance_ca_serial:x}) — [bold green]safe to "
+            "flash[/bold green].",
+            title="Firmware image OK",
+        )
+    elif result.ca_match is None:
+        ui.error_panel(
+            "\n".join(lines)
+            + "\n\nNo CA found in the image — it was probably never patched. "
+            "Patch it via the WebUI box setup first.",
+            title="No CA in image",
+        )
+    else:
+        ui.error_panel(
+            "\n".join(lines)
+            + "\n\nThe embedded CA does NOT match this instance (expected "
+            f"serial {result.instance_ca_serial:x}) — a box flashed with "
+            "this image cannot connect. Re-patch the image via the WebUI "
+            "box setup of THIS instance.",
+            title="Wrong CA — do not flash",
+        )
+
+
 def _box_certs(project: Path) -> None:
     ui.info_panel(
         "Pick the three files dumped from the box (ca.der, client.der, private.der).\n"
@@ -178,6 +230,7 @@ _HANDLERS = {
     "letsencrypt": _letsencrypt,
     "le_renew": _le_renew,
     "export_ca": _export_ca,
+    "fw_check": _fw_check,
     "box_certs": _box_certs,
 }
 

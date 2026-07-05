@@ -89,6 +89,32 @@ def box_ca_path(project_dir: Path) -> Path:
     return project_dir / "certs" / "server" / "ca.der"
 
 
+def load_box_ca(project_dir: Path) -> x509.Certificate | None:
+    """TeddyCloud's box CA, or None while it hasn't been generated yet."""
+    try:
+        data = box_ca_path(project_dir).read_bytes()
+    except FileNotFoundError:
+        return None
+    try:
+        return x509.load_der_x509_certificate(data)
+    except ValueError as exc:
+        raise CertError(
+            f"{box_ca_path(project_dir)} is not a valid DER certificate: {exc}"
+        ) from exc
+
+
+def box_ca_fingerprint(project_dir: Path) -> str | None:
+    """SHA-256 fingerprint (hex) of the box CA, or None if not generated yet.
+
+    This is the identity every flashed box trusts — if it changes, all
+    previously flashed boxes fail their TLS handshake.
+    """
+    cert = load_box_ca(project_dir)
+    if cert is None:
+        return None
+    return cert.fingerprint(hashes.SHA256()).hex()
+
+
 def export_box_ca(project_dir: Path, destination: Path) -> Path:
     """Validate and copy ``certs/server/ca.der`` to *destination*."""
     source = box_ca_path(project_dir)

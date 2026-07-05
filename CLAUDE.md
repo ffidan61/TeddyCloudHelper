@@ -86,8 +86,10 @@ src/teddycloudhelper/
 ├── ports.py       # host-port availability checks (connect test) before starting containers
 ├── certs/         # (v0.3) ca.py (own CA for WebUI access), client_certs.py (issue/renew
 │                  #        browser certs, PKCS#12 export), crl.py (CRL for nginx ssl_crl),
-│                  #        server_certs.py (WebUI cert, ca.der extraction),
+│                  #        server_certs.py (WebUI cert, ca.der extraction/fingerprint),
 │                  #        box_certs.py (validate + install dumped box certs),
+│                  #        firmware.py (v0.10: scan patched images for embedded certs,
+│                  #        verify the CA matches THIS instance before flashing),
 │                  #        letsencrypt.py (v0.6: hostname/email checks, certbot args)
 ├── security.py    # (v0.5) htpasswd (bcrypt), IP allowlist (stdlib ipaddress)
 ├── wizard.py      # (v0.4) setup wizard as a list of testable step functions
@@ -97,7 +99,8 @@ src/teddycloudhelper/
 ├── doctor.py      # (v0.7) health checks (containers, ports, box-TLS on 443, WebUI incl.
 │                  #        security-mitigation-lock detection, WebUI protection, DNS,
 │                  #        box certs, known boxes via /api/getBoxes, LE expiry with
-│                  #        live-TLS fallback) via injectable Probes seam
+│                  #        live-TLS fallback, CA-change guard via state fingerprint,
+│                  #        backup freshness) via injectable Probes seam
 ├── menus/         # per-topic submenus
 └── templates/     # *.j2 for compose + nginx (shared-443 SNI split / separate WebUI port)
 ```
