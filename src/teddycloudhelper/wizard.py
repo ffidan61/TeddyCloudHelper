@@ -20,6 +20,20 @@ from teddycloudhelper.state import AppState
 COMPOSE_FILENAME = "docker-compose.yml"
 NGINX_CONF_RELPATH = Path("nginx") / "nginx.conf"
 
+# Bind-mount sources of the teddycloud service (upstream mounts them under
+# /teddycloud/data/…). Created before docker does, so they are owned by the
+# invoking user instead of root.
+DATA_DIRS = (
+    "certs",
+    "config",
+    "content",
+    "library",
+    "custom_img",
+    "firmware",
+    "cache",
+    "plugins",
+)
+
 
 def step_project_dir() -> Path:
     """Pick (and create) the project directory."""
@@ -232,6 +246,8 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
     """Render all config files for the chosen mode (existing files get a .bak)."""
     if state.deployment_mode == "nginx" and not state.webui_hostname:
         raise ValueError("nginx mode needs a WebUI hostname — run the setup wizard.")
+    for name in DATA_DIRS:
+        (project_dir / name).mkdir(parents=True, exist_ok=True)
     context = {
         "deployment_mode": state.deployment_mode,
         "teddycloud_image_tag": state.teddycloud_image_tag,

@@ -7,8 +7,12 @@ services:
     volumes:
       - ./certs:/teddycloud/certs
       - ./config:/teddycloud/config
-      - ./content:/teddycloud/content
-      - ./library:/teddycloud/library
+      - ./content:/teddycloud/data/content
+      - ./library:/teddycloud/data/library
+      - ./custom_img:/teddycloud/data/www/custom_img
+      - ./firmware:/teddycloud/data/firmware
+      - ./cache:/teddycloud/data/cache
+      - ./plugins:/teddycloud/data/www/plugins
 {%- if deployment_mode == "direct" %}
     ports:
       - "{{ http_port }}:80"

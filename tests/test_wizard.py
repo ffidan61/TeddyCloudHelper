@@ -316,6 +316,14 @@ def test_render_project_nginx(tmp_path):
     assert "tc.home.arpa" in conf
 
 
+def test_render_project_creates_data_dirs(tmp_path):
+    # Bind-mount sources must exist user-owned before docker creates them
+    # as root; includes the upstream data dirs (cache, plugins, …).
+    wizard.render_project(AppState(), tmp_path)
+    for name in wizard.DATA_DIRS:
+        assert (tmp_path / name).is_dir()
+
+
 def test_render_project_rerender_backs_up(tmp_path):
     wizard.render_project(AppState(), tmp_path)
     wizard.render_project(AppState(deployment_mode="nginx", webui_hostname="x"), tmp_path)

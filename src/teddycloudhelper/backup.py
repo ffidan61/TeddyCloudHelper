@@ -1,7 +1,8 @@
 """tar.gz backup and restore of a project's configuration and certificates.
 
-Backed up: tool state, rendered configs, TeddyCloud's ``config/`` and
-``certs/`` (including the irreplaceable dumped box certs), our
+Backed up: tool state, rendered configs, TeddyCloud's ``config/``,
+``certs/`` (including the irreplaceable dumped box certs) and
+``firmware/`` (box firmware dumps — small and irreplaceable too), our
 ``webui-pki/`` and ``security/``. **Never** audio content — ``content/``
 and ``library/`` are huge and re-downloadable/user-managed.
 
@@ -22,6 +23,7 @@ BACKUP_ITEMS = (
     "docker-compose.yml",
     "config",
     "certs",
+    "firmware",
     "webui-pki",
     "security",
     "nginx",

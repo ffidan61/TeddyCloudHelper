@@ -58,6 +58,27 @@ def test_compose_image_tag():
     assert "image: ghcr.io/toniebox-reverse-engineering/teddycloud:develop" in text
 
 
+def test_compose_mounts_all_upstream_data_dirs():
+    # Container paths must match upstream's compose example: content and
+    # library live under /teddycloud/data/, NOT /teddycloud/ — a wrong path
+    # means TeddyCloud writes into the container layer and loses everything
+    # on the next image update.
+    text = render.render_template("docker-compose.yml.j2", DIRECT)
+    for mount in (
+        "- ./certs:/teddycloud/certs",
+        "- ./config:/teddycloud/config",
+        "- ./content:/teddycloud/data/content",
+        "- ./library:/teddycloud/data/library",
+        "- ./custom_img:/teddycloud/data/www/custom_img",
+        "- ./firmware:/teddycloud/data/firmware",
+        "- ./cache:/teddycloud/data/cache",
+        "- ./plugins:/teddycloud/data/www/plugins",
+    ):
+        assert mount in text
+    assert ":/teddycloud/content" not in text
+    assert ":/teddycloud/library" not in text
+
+
 def test_compose_direct_publishes_teddycloud_ports():
     text = render.render_template("docker-compose.yml.j2", DIRECT)
     assert '"80:80"' in text
