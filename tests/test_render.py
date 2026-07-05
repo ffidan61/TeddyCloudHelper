@@ -149,6 +149,15 @@ def test_nginx_slow_upload_and_sse_friendly():
         assert "proxy_buffering off;" in text
 
 
+def test_nginx_streams_request_bodies():
+    # TeddyCloud drops body bytes that arrive in one burst with the
+    # headers (verified 2026-07: uploads through a buffering proxy stall
+    # ~120s and die with 502). The body MUST be streamed.
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        assert "proxy_request_buffering off;" in text
+
+
 def test_nginx_client_cert_auth_off_by_default():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
     assert "ssl_verify_client" not in text
