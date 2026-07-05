@@ -17,6 +17,7 @@ from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import letsencrypt
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import backup as backup_menu
+from teddycloudhelper.menus import boxes as boxes_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
 from teddycloudhelper.menus import doctor as doctor_menu
@@ -61,6 +62,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Set up a new TeddyCloud project", "wizard"),
     ("Project settings (change single options)", "settings"),
     ("Health check (doctor)", "doctor"),
+    ("Show known boxes", "boxes"),
     ("Manage Docker services", "docker"),
     ("Manage certificates", "certs"),
     ("Backup / restore", "backup"),
@@ -78,6 +80,8 @@ def _dispatch(action: str) -> bool:
         settings_menu.run()
     elif action == "doctor":
         doctor_menu.run()
+    elif action == "boxes":
+        boxes_menu.run()
     elif action == "docker":
         docker_menu.run()
     elif action == "certs":

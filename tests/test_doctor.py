@@ -23,6 +23,8 @@ def make_probes(**overrides) -> doctor.Probes:
         http_get=lambda port, sni, host, path: (200, "<html>teddycloud</html>"),
         resolve=lambda host: ["192.168.1.10"],
         getboxes=lambda: '{"boxes":[{"ID":"1","commonName":"001122334455","boxName":"Kids"}]}',
+        local_image_digest=lambda image: "sha256:abc",
+        remote_image_digest=lambda image: "sha256:abc",
     )
     return doctor.Probes(**(defaults | overrides))
 
@@ -334,6 +336,40 @@ def test_webui_protection_none_warns():
 )
 def test_webui_protection_any_mechanism_ok(state):
     assert doctor.check_webui_protection(state).status == "ok"
+
+
+# --- image freshness ---------------------------------------------------------------
+
+
+def test_image_freshness_up_to_date_ok():
+    result = doctor.check_image_freshness(AppState(), make_probes())
+    assert result.status == "ok"
+
+
+def test_image_freshness_outdated_warns():
+    probes = make_probes(remote_image_digest=lambda image: "sha256:newer")
+    result = doctor.check_image_freshness(AppState(teddycloud_image_tag="develop"), probes)
+    assert result.status == "warn"
+    assert "Pull latest images" in result.detail
+
+
+def test_image_freshness_checks_the_configured_channel():
+    seen = []
+
+    def local(image):
+        seen.append(image)
+        return "sha256:abc"
+
+    probes = make_probes(local_image_digest=local)
+    doctor.check_image_freshness(AppState(teddycloud_image_tag="develop"), probes)
+    assert seen == [f"{doctor.TEDDYCLOUD_IMAGE}:develop"]
+
+
+def test_image_freshness_degrades_without_data():
+    no_local = make_probes(local_image_digest=lambda image: None)
+    assert doctor.check_image_freshness(AppState(), no_local).status == "warn"
+    no_remote = make_probes(remote_image_digest=lambda image: None)
+    assert doctor.check_image_freshness(AppState(), no_remote).status == "warn"
 
 
 # --- CA identity / backup ---------------------------------------------------------

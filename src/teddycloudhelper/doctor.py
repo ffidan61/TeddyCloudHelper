@@ -18,6 +18,8 @@ import ipaddress
 import json
 import socket
 import ssl
+import subprocess
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,6 +44,8 @@ BOX_CERT_FILES = ("ca.der", "client.der", "private.der")
 # Nag when the newest backup is older than this.
 BACKUP_WARN_DAYS = 30
 
+TEDDYCLOUD_IMAGE = "ghcr.io/toniebox-reverse-engineering/teddycloud"
+
 _PROBE_TIMEOUT = 5.0
 
 
@@ -65,6 +69,10 @@ class Probes:
     # Raw JSON of /api/getBoxes, queried inside the container so neither
     # nginx routing nor WebUI auth can get in the way.
     getboxes: Callable[[], str]
+    # sha256 digest of an image ref, locally and in the registry (None if
+    # undeterminable — docker missing, registry unreachable, never pulled).
+    local_image_digest: Callable[[str], str | None]
+    remote_image_digest: Callable[[str], str | None]
 
 
 # --- default (real) probe implementations ------------------------------------
@@ -123,6 +131,48 @@ def _resolve(hostname: str) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
+def _local_image_digest(image: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", image],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    out = result.stdout.strip()
+    return out.rsplit("@", 1)[-1] if "@" in out else None
+
+
+def _remote_image_digest(image: str) -> str | None:
+    """Manifest digest from the ghcr registry (anonymous pull token)."""
+    name, _, tag = image.rpartition(":")
+    name = name.removeprefix("ghcr.io/")
+    try:
+        with urllib.request.urlopen(
+            f"https://ghcr.io/token?service=ghcr.io&scope=repository:{name}:pull",
+            timeout=_PROBE_TIMEOUT,
+        ) as response:
+            token = json.load(response)["token"]
+        request = urllib.request.Request(
+            f"https://ghcr.io/v2/{name}/manifests/{tag}",
+            method="HEAD",
+            headers={
+                "Authorization": f"Bearer {token}",
+                # Multi-arch images: ask for the index, whose digest is what
+                # `docker pull` records in RepoDigests.
+                "Accept": "application/vnd.oci.image.index.v1+json, "
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=_PROBE_TIMEOUT) as response:
+            return response.headers.get("Docker-Content-Digest")
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def default_probes(project_dir: Path) -> Probes:
     compose = docker_cli.Compose(project_dir)
 
@@ -140,6 +190,8 @@ def default_probes(project_dir: Path) -> Probes:
         http_get=_http_get,
         resolve=_resolve,
         getboxes=getboxes,
+        local_image_digest=_local_image_digest,
+        remote_image_digest=_remote_image_digest,
     )
 
 
@@ -431,6 +483,32 @@ def check_letsencrypt(project_dir: Path, state: AppState, probes: Probes) -> Che
     )
 
 
+def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
+    """Is the running TeddyCloud image the newest one on its channel?"""
+    name = "Image freshness"
+    image = f"{TEDDYCLOUD_IMAGE}:{state.teddycloud_image_tag}"
+    local = probes.local_image_digest(image)
+    if local is None:
+        return CheckResult(
+            name, "warn", f"No local digest for {image} — image never pulled?"
+        )
+    remote = probes.remote_image_digest(image)
+    if remote is None:
+        return CheckResult(
+            name, "warn", "Could not query the registry (offline?) — skipping."
+        )
+    if local != remote:
+        return CheckResult(
+            name,
+            "warn",
+            f"A newer {state.teddycloud_image_tag!r} image is available — "
+            "use 'Pull latest images' in the Docker menu.",
+        )
+    return CheckResult(
+        name, "ok", f"Running the newest {state.teddycloud_image_tag!r} image."
+    )
+
+
 def check_ca_identity(project_dir: Path, state: AppState) -> CheckResult:
     """The box CA must never change silently — flashed boxes trust exactly
     this CA. Records the fingerprint on first sight (caller saves state)."""
@@ -574,6 +652,7 @@ def run_checks(
         check_ca_identity(project_dir, state),
         check_box_certs(project_dir),
         check_boxes(probes),
+        check_image_freshness(state, probes),
     ]
     if state.webui_tls_mode == "letsencrypt":
         results.append(check_letsencrypt(project_dir, state, probes))
