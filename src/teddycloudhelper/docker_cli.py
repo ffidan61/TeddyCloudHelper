@@ -25,6 +25,9 @@ COMPOSE_FILENAMES = (
 # runner(args, cwd) -> CompletedProcess; replaced by a fake in tests.
 Runner = Callable[[list[str], Path], subprocess.CompletedProcess]
 
+# stream_runner(args, cwd) -> None; runs attached to the terminal (live logs).
+StreamRunner = Callable[[list[str], Path], None]
+
 
 class DockerError(Exception):
     """A docker/compose invocation failed."""
@@ -42,6 +45,16 @@ def find_compose_file(directory: Path) -> Path | None:
 def _default_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    except OSError as exc:
+        raise DockerError(f"Could not run {args[0]!r}: {exc}") from exc
+
+
+def _default_stream_runner(args: list[str], cwd: Path) -> None:
+    # Inherits the terminal; Ctrl-C stops the stream and returns to the menu.
+    try:
+        subprocess.run(args, cwd=cwd)
+    except KeyboardInterrupt:
+        pass
     except OSError as exc:
         raise DockerError(f"Could not run {args[0]!r}: {exc}") from exc
 
@@ -84,9 +97,15 @@ def _parse_ps_output(stdout: str) -> list[ServiceStatus]:
 class Compose:
     """``docker compose`` operations for one project directory."""
 
-    def __init__(self, project_dir: Path, runner: Runner | None = None) -> None:
+    def __init__(
+        self,
+        project_dir: Path,
+        runner: Runner | None = None,
+        stream_runner: StreamRunner | None = None,
+    ) -> None:
         self.project_dir = project_dir
         self._runner = runner or _default_runner
+        self._stream_runner = stream_runner or _default_stream_runner
 
     def _run(self, *compose_args: str) -> subprocess.CompletedProcess:
         args = ["docker", "compose", *compose_args]
@@ -147,3 +166,14 @@ class Compose:
             args.append(service)
         result = self._run(*args)
         return result.stdout
+
+    def logs_follow(self, service: str | None = None, tail: int = 50) -> None:
+        """Stream logs live to the terminal until the user hits Ctrl-C."""
+        args = ["docker", "compose", "logs", "--follow", "--tail", str(tail)]
+        if service is not None:
+            args.append(service)
+        self._stream_runner(args, self.project_dir)
+
+    def exec_service(self, service: str, *args: str) -> subprocess.CompletedProcess:
+        """Run a command inside a *running* service container (``exec -T``)."""
+        return self._run("exec", "-T", service, *args)

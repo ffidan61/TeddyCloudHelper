@@ -83,7 +83,18 @@ def _show_logs(compose: docker_cli.Compose) -> None:
             [("All services", "")] + [(name, name) for name in services],
         )
         service = choice or None
-    ui.console.print(compose.logs(tail=100, service=service) or "[dim](no log output)[/dim]")
+    mode = ui.menu(
+        "How?",
+        [
+            ("Last 100 lines", "tail"),
+            ("Follow live (stop with Ctrl-C)", "follow"),
+        ],
+    )
+    if mode == "follow":
+        ui.console.print("[dim]Following logs — Ctrl-C returns to the menu.[/dim]")
+        compose.logs_follow(service=service)
+    else:
+        ui.console.print(compose.logs(tail=100, service=service) or "[dim](no log output)[/dim]")
 
 
 def _switch_image(compose: docker_cli.Compose) -> None:

@@ -155,6 +155,36 @@ def test_logs_for_single_service(tmp_path):
     ]
 
 
+def test_logs_follow_uses_stream_runner(tmp_path):
+    streamed = []
+    compose = docker_cli.Compose(
+        tmp_path, stream_runner=lambda args, cwd: streamed.append((args, cwd))
+    )
+    compose.logs_follow(service="teddycloud")
+    assert streamed == [
+        (["docker", "compose", "logs", "--follow", "--tail", "50", "teddycloud"], tmp_path)
+    ]
+
+
+def test_logs_follow_all_services(tmp_path):
+    streamed = []
+    compose = docker_cli.Compose(tmp_path, stream_runner=lambda args, cwd: streamed.append(args))
+    compose.logs_follow()
+    assert streamed == [["docker", "compose", "logs", "--follow", "--tail", "50"]]
+
+
+def test_exec_service_builds_args(tmp_path):
+    compose, runner = make_compose(tmp_path, completed(stdout="{}"))
+    compose.exec_service("teddycloud", "curl", "-s", "http://localhost/api/getBoxes")
+    assert runner.calls == [
+        (
+            ["docker", "compose", "exec", "-T", "teddycloud",
+             "curl", "-s", "http://localhost/api/getBoxes"],
+            tmp_path,
+        )
+    ]
+
+
 def test_find_compose_file_precedence(tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     (tmp_path / "compose.yaml").write_text("services: {}\n")
