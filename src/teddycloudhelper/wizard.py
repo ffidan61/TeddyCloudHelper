@@ -347,7 +347,7 @@ def run() -> None:
             # unchanged, `up` leaves running containers alone and nginx keeps
             # serving the OLD config — force a restart.
             compose.restart()
-    ui.info_panel(
+    ui.warn_panel(
         "Services started.\n\n"
         "On the FIRST start TeddyCloud generates its CA and server "
         "certificates — RSA key generation can take several minutes on slow "
@@ -355,7 +355,8 @@ def run() -> None:
         "watch progress with the 'Show recent logs' action in the Docker "
         "menu.\n\n"
         "Afterwards, export certs/server/ca.der via the certificate menu to "
-        "flash it onto the box."
+        "flash it onto the box.",
+        title="Services started",
     )
 
 

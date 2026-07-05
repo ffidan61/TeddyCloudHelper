@@ -70,5 +70,10 @@ def error_panel(message: str, title: str = "Error") -> None:
     console.print(Panel(message, title=title, border_style="red"))
 
 
+def warn_panel(message: str, title: str = "Note") -> None:
+    """Orange panel for expected-but-important notices (not errors)."""
+    console.print(Panel(message, title=title, border_style="orange1"))
+
+
 def info_panel(message: str, title: str = "Info") -> None:
     console.print(Panel(message, title=title, border_style="cyan"))
