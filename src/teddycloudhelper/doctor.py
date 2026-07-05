@@ -431,7 +431,7 @@ def check_webui_protection(state: AppState) -> CheckResult:
         "No Basic Auth, client certificates or IP allowlist — if the WebUI "
         "is reachable from the internet, TeddyCloud locks itself once "
         "scanners find it (and the boxes stop working). Enable one of the "
-        "three in the security menu.",
+        "three under Project settings → Security.",
     )
 
 

@@ -15,6 +15,7 @@ from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
 from teddycloudhelper.menus import project as project_menu
+from teddycloudhelper.menus import security as security_menu
 from teddycloudhelper.state import AppState
 
 MENU_ACTIONS: list[tuple[str, str]] = [
@@ -22,6 +23,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Change WebUI hostname", "hostname"),
     ("Change where the WebUI listens (own port / shared 443)", "port_mode"),
     ("Switch deployment mode (direct / nginx)", "mode"),
+    ("Security (Basic Auth, client certificates, IP allowlist)", "security"),
     ("Back to main menu", "back"),
 ]
 
@@ -157,6 +159,10 @@ def run() -> None:
             return
         if action == "back":
             return
+        if action == "security":
+            # Delegate to the security submenu (own loop, own error handling).
+            security_menu.run()
+            continue
         try:
             state = state_mod.load_state(project)
             _HANDLERS[action](state, project)

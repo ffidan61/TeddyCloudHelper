@@ -25,7 +25,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Remove a Basic Auth user", "remove_user"),
     ("Add an IP allowlist entry", "add_ip"),
     ("Remove an IP allowlist entry", "remove_ip"),
-    ("Back to main menu", "back"),
+    ("Back to project settings", "back"),
 ]
 
 

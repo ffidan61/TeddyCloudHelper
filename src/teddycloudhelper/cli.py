@@ -15,7 +15,6 @@ from teddycloudhelper.menus import backup as backup_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
 from teddycloudhelper.menus import doctor as doctor_menu
-from teddycloudhelper.menus import security as security_menu
 from teddycloudhelper.menus import settings as settings_menu
 
 
@@ -59,7 +58,6 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Health check (doctor)", "doctor"),
     ("Manage Docker services", "docker"),
     ("Manage certificates", "certs"),
-    ("Security (Basic Auth, IP allowlist)", "security"),
     ("Backup / restore", "backup"),
     ("Quit", "quit"),
 ]
@@ -79,8 +77,6 @@ def _dispatch(action: str) -> bool:
         docker_menu.run()
     elif action == "certs":
         certs_menu.run()
-    elif action == "security":
-        security_menu.run()
     elif action == "backup":
         backup_menu.run()
     return True
