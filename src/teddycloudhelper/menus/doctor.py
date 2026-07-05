@@ -1,31 +1,27 @@
-"""Health-check ("doctor") menu action: run all checks, render one table."""
+"""Health-check ("doctor") menu action: run all checks, render one table.
+
+``show_results`` is shared with the headless ``--doctor`` CLI mode; the
+interactive extras (accepting a changed CA, creating a missing backup)
+only run here.
+"""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.table import Table
 
-from teddycloudhelper import doctor, ui
+from teddycloudhelper import backup, doctor, ui
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import server_certs
 from teddycloudhelper.menus import project as project_menu
+from teddycloudhelper.state import AppState
 
 _STYLES = {"ok": "green", "warn": "yellow", "fail": "red"}
 
 
-def run() -> None:
-    project = project_menu.active_project()
-    if project is None:
-        return
-    try:
-        state = state_mod.load_state(project)
-    except state_mod.StateError as exc:
-        ui.error_panel(str(exc), title="Health check")
-        return
-    ui.console.print(f"Checking [bold]{project}[/bold]…")
-    results = doctor.run_checks(project, state)
-    # check_ca_identity records the fingerprint on first sight.
-    state_mod.save_state(state, project)
-
+def show_results(results: list[doctor.CheckResult]) -> None:
+    """Render the check table plus a one-line verdict."""
     table = Table(title="Health check")
     table.add_column("Check")
     table.add_column("Status")
@@ -47,10 +43,27 @@ def run() -> None:
     else:
         ui.info_panel("Everything looks healthy.")
 
+
+def run() -> None:
+    project = project_menu.active_project()
+    if project is None:
+        return
+    try:
+        state = state_mod.load_state(project)
+    except state_mod.StateError as exc:
+        ui.error_panel(str(exc), title="Health check")
+        return
+    ui.console.print(f"Checking [bold]{project}[/bold]…")
+    results = doctor.run_checks(project, state)
+    # check_ca_identity records the fingerprint on first sight.
+    state_mod.save_state(state, project)
+
+    show_results(results)
     _offer_ca_acceptance(project, state)
+    _offer_backup(project, results)
 
 
-def _offer_ca_acceptance(project, state) -> None:
+def _offer_ca_acceptance(project: Path, state: AppState) -> None:
     """After a CA-change failure: let the user accept the new CA as known
     (only sensible when the change was intentional and boxes are re-flashed)."""
     current = server_certs.box_ca_fingerprint(project)
@@ -69,3 +82,17 @@ def _offer_ca_acceptance(project, state) -> None:
         state.known_ca_fingerprint = current
         state_mod.save_state(state, project)
         ui.info_panel("New box CA recorded.")
+
+
+def _offer_backup(project: Path, results: list[doctor.CheckResult]) -> None:
+    """The backup check warned — fix it on the spot."""
+    if not any(r.name == "Backup" and r.status == "warn" for r in results):
+        return
+    if not ui.confirm("Create a backup now?", default=True):
+        return
+    try:
+        path = backup.create_backup(project)
+    except backup.BackupError as exc:
+        ui.error_panel(str(exc), title="Backup failed")
+        return
+    ui.info_panel(f"Backup written: {path}")

@@ -177,6 +177,31 @@ def check_ports(state: AppState, probes: Probes) -> CheckResult:
     return CheckResult("Ports", "ok", "Something listens on every published port.")
 
 
+def _classify_box_path_cert(
+    state: AppState, cert: x509.Certificate, name: str, via: str
+) -> CheckResult:
+    """Shared verdict: is this the cert a box must see on 443?"""
+    subject, issuer = _cn(cert.subject), _cn(cert.issuer)
+    if "let's encrypt" in cert.issuer.rfc4514_string().lower():
+        return CheckResult(
+            name,
+            "fail",
+            f"{via} presents a Let's Encrypt certificate ({subject}) — the "
+            "box path is being TLS-terminated instead of passed through. "
+            "Boxes cannot connect; re-run the setup wizard.",
+        )
+    if state.webui_hostname and subject == state.webui_hostname:
+        return CheckResult(
+            name,
+            "fail",
+            f"{via} presents the WebUI certificate ({subject}) — the SNI "
+            "split routes box traffic to the WebUI. Boxes cannot connect.",
+        )
+    return CheckResult(
+        name, "ok", f"Presents {subject!r} (issuer {issuer!r}) — TeddyCloud's own cert."
+    )
+
+
 def check_box_tls(state: AppState, probes: Probes) -> CheckResult:
     """The certificate on 443 as the box sees it (no SNI, like a Toniebox)."""
     name = "Box port 443"
@@ -192,25 +217,26 @@ def check_box_tls(state: AppState, probes: Probes) -> CheckResult:
         )
     except OSError as exc:
         return CheckResult(name, "fail", f"No TLS on 127.0.0.1:443: {exc}")
-    subject, issuer = _cn(cert.subject), _cn(cert.issuer)
-    issuer_full = cert.issuer.rfc4514_string()
-    if "let's encrypt" in issuer_full.lower():
+    return _classify_box_path_cert(state, cert, name, "Port 443")
+
+
+def check_box_sni_routing(state: AppState, probes: Probes) -> CheckResult:
+    """When a hostname is patched into the box firmware: probing 443 with
+    exactly that SNI must reach TeddyCloud, not the WebUI (SNI collision)."""
+    name = f"Box SNI {state.box_hostname}"
+    try:
+        cert = probes.tls_cert(443, state.box_hostname)
+    except ssl.SSLError as exc:
         return CheckResult(
             name,
-            "fail",
-            f"Port 443 presents a Let's Encrypt certificate ({subject}) — the "
-            "box path is being TLS-terminated instead of passed through. "
-            "Boxes cannot connect; re-run the setup wizard.",
+            "warn",
+            f"TLS answered but the handshake did not complete ({exc}) — "
+            "TeddyCloud may simply require the box client certificate.",
         )
-    if state.webui_hostname and subject == state.webui_hostname:
-        return CheckResult(
-            name,
-            "fail",
-            f"Port 443 presents the WebUI certificate ({subject}) — the SNI "
-            "split routes box traffic to the WebUI. Boxes cannot connect.",
-        )
-    return CheckResult(
-        name, "ok", f"Presents {subject!r} (issuer {issuer!r}) — TeddyCloud's own cert."
+    except OSError as exc:
+        return CheckResult(name, "fail", f"No TLS on 127.0.0.1:443: {exc}")
+    return _classify_box_path_cert(
+        state, cert, name, f"443 with SNI {state.box_hostname!r}"
     )
 
 
@@ -285,18 +311,34 @@ def check_webui(state: AppState, probes: Probes) -> CheckResult:
     return CheckResult(name, "warn", f"{where} answers HTTP {status}.")
 
 
-def check_box_dns(probes: Probes) -> CheckResult:
-    """Where BOX_HOSTNAME points *from this machine* — the box's view can
-    differ (per-device DNS override), so failures are warnings, not errors."""
-    name = f"DNS {BOX_HOSTNAME}"
+def check_box_dns(state: AppState, probes: Probes) -> CheckResult:
+    """DNS for the name the box actually dials: the hostname patched into
+    its firmware if known, else the original Boxine name (DNS-redirect
+    setups, where the box's view can differ from this machine's)."""
+    hostname = state.box_hostname or BOX_HOSTNAME
+    name = f"DNS {hostname}"
     try:
-        addresses = probes.resolve(BOX_HOSTNAME)
+        addresses = probes.resolve(hostname)
     except OSError:
+        if state.box_hostname:
+            return CheckResult(
+                name,
+                "fail",
+                f"The box hostname {hostname} does not resolve — the box "
+                "cannot find the server. Create the DNS record.",
+            )
         return CheckResult(
             name,
             "warn",
-            f"{BOX_HOSTNAME} does not resolve from this machine. Fine if only "
+            f"{hostname} does not resolve from this machine. Fine if only "
             "the box's DNS is redirected — but the BOX must resolve it to the "
+            "TeddyCloud host.",
+        )
+    if state.box_hostname:
+        return CheckResult(
+            name,
+            "ok",
+            f"Resolves to {', '.join(addresses)} — make sure that is the "
             "TeddyCloud host.",
         )
     public = [a for a in addresses if ipaddress.ip_address(a).is_global]
@@ -491,7 +533,7 @@ def check_webui_protection(state: AppState) -> CheckResult:
         "No Basic Auth, client certificates or IP allowlist — if the WebUI "
         "is reachable from the internet, TeddyCloud locks itself once "
         "scanners find it (and the boxes stop working). Enable one of the "
-        "three under Project settings → Security.",
+        "three under Project settings / Security.",
     )
 
 
@@ -522,9 +564,13 @@ def run_checks(
         check_containers(probes),
         check_ports(state, probes),
         check_box_tls(state, probes),
+    ]
+    if state.box_hostname:
+        results.append(check_box_sni_routing(state, probes))
+    results += [
         check_webui(state, probes),
         check_webui_protection(state),
-        check_box_dns(probes),
+        check_box_dns(state, probes),
         check_ca_identity(project_dir, state),
         check_box_certs(project_dir),
         check_boxes(probes),

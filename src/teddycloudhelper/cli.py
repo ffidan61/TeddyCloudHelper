@@ -1,13 +1,18 @@
-"""Entry point: preflight checks, then the interactive main menu loop."""
+"""Entry point: preflight checks, then the interactive main menu loop.
+
+``--doctor`` runs the health checks non-interactively (for cron) and exits
+non-zero when any check fails.
+"""
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 from pathlib import Path
 
 from rich.panel import Panel
 
-from teddycloudhelper import __version__, ui, wizard
+from teddycloudhelper import __version__, doctor, ui, wizard
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import letsencrypt
 from teddycloudhelper.certs.ca import CertError
@@ -82,7 +87,47 @@ def _dispatch(action: str) -> bool:
     return True
 
 
-def main() -> int:
+def _headless_doctor(project: Path | None) -> int:
+    """Run the checks without prompts; exit 1 on failures, 2 on setup errors."""
+    project = project or state_mod.load_last_project()
+    if project is None or not project.is_dir():
+        ui.error_panel(
+            "No project found — pass --project /path/to/your/teddycloud/project."
+        )
+        return 2
+    try:
+        state = state_mod.load_state(project)
+    except state_mod.StateError as exc:
+        ui.error_panel(str(exc))
+        return 2
+    ui.console.print(f"Checking [bold]{project}[/bold]…")
+    results = doctor.run_checks(project, state)
+    state_mod.save_state(state, project)  # CA fingerprint recording
+    doctor_menu.show_results(results)
+    return 1 if any(r.status == "fail" for r in results) else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="teddycloudhelper",
+        description="Interactive toolkit to set up and manage a TeddyCloud server.",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="run the health checks non-interactively and exit "
+        "(exit code 1 on failures — cron-friendly)",
+    )
+    parser.add_argument(
+        "--project",
+        type=Path,
+        default=None,
+        help="project directory for --doctor (default: the last used project)",
+    )
+    args = parser.parse_args(argv)
+    if args.doctor:
+        return _headless_doctor(args.project)
+
     console = ui.console
     console.print(
         Panel(
