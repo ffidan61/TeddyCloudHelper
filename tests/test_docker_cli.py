@@ -147,6 +147,14 @@ def test_logs_returns_stdout(tmp_path):
     assert runner.calls[0][0] == ["docker", "compose", "logs", "--no-color", "--tail", "50"]
 
 
+def test_logs_for_single_service(tmp_path):
+    compose, runner = make_compose(tmp_path, completed(stdout="nginx line\n"))
+    assert compose.logs(tail=50, service="nginx") == "nginx line\n"
+    assert runner.calls[0][0] == [
+        "docker", "compose", "logs", "--no-color", "--tail", "50", "nginx",
+    ]
+
+
 def test_find_compose_file_precedence(tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     (tmp_path / "compose.yaml").write_text("services: {}\n")

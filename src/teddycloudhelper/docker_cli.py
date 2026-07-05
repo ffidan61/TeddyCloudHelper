@@ -140,6 +140,10 @@ class Compose:
             run_args += ["--entrypoint", entrypoint]
         return self._run(*run_args, service, *args)
 
-    def logs(self, tail: int = 100) -> str:
-        result = self._run("logs", "--no-color", "--tail", str(tail))
+    def logs(self, tail: int = 100, service: str | None = None) -> str:
+        """Recent log output; ``service`` limits it to one compose service."""
+        args = ["logs", "--no-color", "--tail", str(tail)]
+        if service is not None:
+            args.append(service)
+        result = self._run(*args)
         return result.stdout

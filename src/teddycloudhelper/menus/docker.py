@@ -56,7 +56,7 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
         compose.restart()
         _print_status(compose)
     elif action == "logs":
-        ui.console.print(compose.logs(tail=100) or "[dim](no log output)[/dim]")
+        _show_logs(compose)
     elif action == "pull":
         compose.pull()
         ui.info_panel("Images pulled.")
@@ -70,6 +70,20 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
     elif action == "switch":
         return project_menu.adopt_project()
     return None
+
+
+def _show_logs(compose: docker_cli.Compose) -> None:
+    """Show recent logs, optionally limited to one service to keep it readable."""
+    services = sorted({svc.service for svc in compose.ps() if svc.service})
+    service: str | None = None
+    if len(services) > 1:
+        # "" stands for "all" because ui.menu only deals in strings.
+        choice = ui.menu(
+            "Show logs for which service?",
+            [("All services", "")] + [(name, name) for name in services],
+        )
+        service = choice or None
+    ui.console.print(compose.logs(tail=100, service=service) or "[dim](no log output)[/dim]")
 
 
 def _switch_image(compose: docker_cli.Compose) -> None:
