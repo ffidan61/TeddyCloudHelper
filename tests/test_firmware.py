@@ -102,6 +102,25 @@ def test_check_image_without_ca(tmp_path):
     assert result.box_cert_cn == "DCDA0C40B7F8"
 
 
+def test_list_images_newest_first(tmp_path):
+    import os
+
+    fw = tmp_path / "firmware"
+    fw.mkdir()
+    old = fw / "ESP32_old.bin"
+    new = fw / "ESP32_new_patched.bin"
+    old.write_bytes(b"x")
+    new.write_bytes(b"x")
+    os.utime(old, (1, 1))
+    (fw / "notes.txt").write_text("ignored")
+
+    assert firmware.list_images(tmp_path) == [new, old]
+
+
+def test_list_images_without_dir(tmp_path):
+    assert firmware.list_images(tmp_path) == []
+
+
 def test_check_image_needs_instance_ca(tmp_path):
     image = make_image(tmp_path, make_cert("whatever"))
     with pytest.raises(CertError, match="first container start"):

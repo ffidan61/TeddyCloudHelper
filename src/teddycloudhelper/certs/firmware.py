@@ -40,6 +40,20 @@ def _cn(name: x509.Name) -> str:
     return str(attrs[0].value) if attrs else name.rfc4514_string()
 
 
+def list_images(project_dir: Path) -> list[Path]:
+    """.bin files in the project's firmware/ bind mount, newest first.
+
+    TeddyCloud stores uploaded dumps and patched images there, so this is
+    where the file to check usually already lives.
+    """
+    directory = project_dir / "firmware"
+    if not directory.is_dir():
+        return []
+    return sorted(
+        directory.glob("*.bin"), key=lambda p: p.stat().st_mtime_ns, reverse=True
+    )
+
+
 def scan_certificates(image_path: Path) -> list[x509.Certificate]:
     """Every unique DER certificate embedded in *image_path*."""
     try:

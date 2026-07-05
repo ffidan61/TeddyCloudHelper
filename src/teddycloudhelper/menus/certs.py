@@ -159,7 +159,20 @@ def _export_ca(project: Path) -> None:
 def _fw_check(project: Path) -> None:
     """Verify a patched image BEFORE flashing — an image patched by another
     instance produces nothing but silent TLS handshake failures."""
-    image = ui.ask_path("Path to the patched firmware image (.bin):", must_exist=True)
+    images = firmware.list_images(project)
+    if images:
+        choices = [
+            (f"{p.name} ({p.stat().st_size // (1024 * 1024)} MiB)", str(p))
+            for p in images
+        ] + [("Pick another file…", "other")]
+        selected = ui.menu("Check which image?", choices)
+        image = (
+            ui.ask_path("Path to the firmware image (.bin):", must_exist=True)
+            if selected == "other"
+            else Path(selected)
+        )
+    else:
+        image = ui.ask_path("Path to the firmware image (.bin):", must_exist=True)
     result = firmware.check_image(project, image)
     lines = [f"Certificates found in the image: {len(result.certificates)}"]
     for cert in result.certificates:
