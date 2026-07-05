@@ -233,6 +233,29 @@ def test_dns_unresolvable_warns():
     assert doctor.check_box_dns(probes).status == "warn"
 
 
+# --- WebUI protection -------------------------------------------------------------
+
+
+def test_webui_protection_none_warns():
+    # Unprotected WebUIs trip TeddyCloud's security-mitigation lock (seen
+    # in prod 2026-07: internet scanners → lock → boxes cut off).
+    result = doctor.check_webui_protection(AppState())
+    assert result.status == "warn"
+    assert "locks itself" in result.detail
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        AppState(basic_auth_enabled=True),
+        AppState(webui_client_cert_auth=True),
+        AppState(ip_allowlist=["192.168.0.0/24"]),
+    ],
+)
+def test_webui_protection_any_mechanism_ok(state):
+    assert doctor.check_webui_protection(state).status == "ok"
+
+
 # --- box certs / files / letsencrypt ---------------------------------------------
 
 
@@ -307,7 +330,7 @@ def test_run_checks_healthy_project_all_ok(tmp_path):
     client_dir.mkdir(parents=True)
     for name in doctor.BOX_CERT_FILES:
         (client_dir / name).write_bytes(b"x")
-    results = doctor.run_checks(tmp_path, AppState(), make_probes())
+    results = doctor.run_checks(tmp_path, AppState(basic_auth_enabled=True), make_probes())
     assert all(r.status == "ok" for r in results), [
         (r.name, r.detail) for r in results if r.status != "ok"
     ]

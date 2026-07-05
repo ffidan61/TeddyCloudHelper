@@ -177,19 +177,19 @@ def test_nginx_security_off_by_default():
     assert "deny all;" not in text
 
 
-def test_nginx_basic_auth_guards_both_servers():
+def test_nginx_basic_auth_guards_webui():
     context = NGINX_SEPARATE | {"basic_auth_enabled": True}
     text = render.render_template("nginx.conf.j2", context)
-    assert text.count('auth_basic "TeddyCloud WebUI";') == 2  # port 80 + WebUI
-    assert text.count("auth_basic_user_file /etc/teddycloudhelper/security/htpasswd;") == 2
+    assert text.count('auth_basic "TeddyCloud WebUI";') == 1  # the TLS WebUI server
+    assert text.count("auth_basic_user_file /etc/teddycloudhelper/security/htpasswd;") == 1
 
 
-def test_nginx_allowlist_guards_both_servers():
+def test_nginx_allowlist_guards_webui():
     context = NGINX_SEPARATE | {"ip_allowlist": ["192.168.0.0/24", "10.0.0.5"]}
     text = render.render_template("nginx.conf.j2", context)
-    assert text.count("allow 192.168.0.0/24;") == 2
-    assert text.count("allow 10.0.0.5;") == 2
-    assert text.count("deny all;") == 2
+    assert text.count("allow 192.168.0.0/24;") == 1
+    assert text.count("allow 10.0.0.5;") == 1
+    assert text.count("deny all;") == 1
     # the box path (stream block) must never be restricted
     stream_block = text.split("http {")[0]
     assert "deny" not in stream_block
@@ -201,15 +201,30 @@ def test_nginx_acme_challenge_always_served():
         assert "location /.well-known/acme-challenge/" in text
 
 
-def test_nginx_acme_challenge_bypasses_security():
+def test_nginx_port80_never_reaches_teddycloud():
+    # Unauthenticated internet noise on port 80 (crawlers, /.env scanners)
+    # reaching TeddyCloud trips its security-mitigation lock, which also
+    # cuts off the boxes (seen in prod 2026-07). Port 80 must only serve
+    # ACME and redirect — even with all security features enabled, the
+    # challenge stays reachable because the block carries no auth at all.
     context = NGINX_SEPARATE | {
         "basic_auth_enabled": True,
         "ip_allowlist": ["192.168.0.0/24"],
     }
     text = render.render_template("nginx.conf.j2", context)
-    challenge = text.split("location /.well-known/acme-challenge/", 1)[1].split("}", 1)[0]
-    assert "auth_basic off;" in challenge
-    assert "allow all;" in challenge
+    port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
+    assert "proxy_pass" not in port80
+    assert "auth_basic " not in port80
+    assert "deny" not in port80
+    assert "location /.well-known/acme-challenge/" in port80
+    assert "return 301 https://$host:8443$request_uri;" in port80
+
+
+def test_nginx_port80_redirect_targets_webui_port():
+    text = render.render_template("nginx.conf.j2", NGINX_SHARED)
+    assert "return 301 https://$host$request_uri;" in text  # shared: WebUI on 443
+    text = render.render_template("nginx.conf.j2", NGINX_SEPARATE | {"webui_port": 9443})
+    assert "return 301 https://$host:9443$request_uri;" in text
 
 
 def test_nginx_letsencrypt_cert_paths():

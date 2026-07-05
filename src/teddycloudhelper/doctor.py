@@ -312,6 +312,29 @@ def check_letsencrypt(project_dir: Path, state: AppState) -> CheckResult:
     )
 
 
+def check_webui_protection(state: AppState) -> CheckResult:
+    """An unprotected WebUI trips TeddyCloud's security-mitigation lock as
+    soon as internet scanners find it — which also cuts off the boxes."""
+    name = "WebUI protection"
+    active = []
+    if state.basic_auth_enabled:
+        active.append("Basic Auth")
+    if state.webui_client_cert_auth:
+        active.append("client certificates")
+    if state.ip_allowlist:
+        active.append("IP allowlist")
+    if active:
+        return CheckResult(name, "ok", f"Protected by: {', '.join(active)}.")
+    return CheckResult(
+        name,
+        "warn",
+        "No Basic Auth, client certificates or IP allowlist — if the WebUI "
+        "is reachable from the internet, TeddyCloud locks itself once "
+        "scanners find it (and the boxes stop working). Enable one of the "
+        "three in the security menu.",
+    )
+
+
 def check_files(project_dir: Path, state: AppState) -> CheckResult:
     missing = []
     if docker_cli.find_compose_file(project_dir) is None:
@@ -340,6 +363,7 @@ def run_checks(
         check_ports(state, probes),
         check_box_tls(state, probes),
         check_webui(state, probes),
+        check_webui_protection(state),
         check_box_dns(probes),
         check_box_certs(project_dir),
     ]
