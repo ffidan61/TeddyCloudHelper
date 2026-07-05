@@ -52,15 +52,20 @@ def test_step_webui_separate_port(monkeypatch):
     assert state.webui_port == 9443
 
 
-def test_step_webui_shared_asks_no_port(monkeypatch):
+def test_step_webui_shared_asks_no_port_but_warns(monkeypatch):
     state = AppState(webui_port=8443)
     answer_text(monkeypatch, "tc.home.arpa")  # only the hostname prompt exists
     answer_menu(monkeypatch, "shared")
+    warnings = []
+    monkeypatch.setattr(ui, "warn_panel", lambda msg, **kw: warnings.append(msg))
 
     wizard.step_webui(state)
 
     assert state.webui_port_mode == "shared"
     assert state.webui_port == 8443  # untouched
+    # Shared 443 only works when the box has its own hostname — the wizard
+    # must say so (SNI collision cost a full debugging day in prod).
+    assert warnings and "own DNS name" in warnings[0]
 
 
 def test_ask_port_rejects_garbage_until_valid(monkeypatch):

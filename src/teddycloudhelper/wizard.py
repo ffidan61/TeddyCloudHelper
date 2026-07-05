@@ -74,12 +74,25 @@ def step_webui(state: AppState) -> None:
     state.webui_port_mode = ui.menu(
         "Where should the WebUI listen?",
         [
-            ("On its own port (default 8443)", "separate"),
-            ("On 443, shared with the box via SNI split", "shared"),
+            ("On its own port, default 8443 (recommended)", "separate"),
+            (
+                "On 443, shared with the box via SNI split "
+                "(advanced — the box then needs its OWN hostname)",
+                "shared",
+            ),
         ],
     )
     if state.webui_port_mode == "separate":
         state.webui_port = _ask_port(state.webui_port or 8443)
+    else:
+        ui.warn_panel(
+            "Shared 443 routes by TLS server name (SNI): connections using "
+            f"{state.webui_hostname!r} go to the WebUI, everything else to "
+            "the box endpoint. A box whose firmware is patched with the "
+            "WebUI hostname CANNOT connect — give the box its own DNS name "
+            "(same IP) and use that when patching the firmware.",
+            title="Shared port 443",
+        )
 
 
 def _ask_port(default: int) -> int:

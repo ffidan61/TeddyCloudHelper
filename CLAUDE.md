@@ -109,3 +109,9 @@ v0.1 skeleton → v0.2 Docker management (adopt existing installs) → v0.3 cert
 box-cert handling, ca.der export) → v0.4 setup wizard + templates → v0.5 security +
 backup → v0.6 Let's Encrypt for the WebUI hostname → v0.7 health check ("doctor").
 No PyPI release for now — installation via git URL.
+
+Wizard default for the WebUI is the **separate port** (8443). Shared-443 (SNI split)
+stays available but is marked advanced: it only works when the box firmware is patched
+with its OWN hostname (≠ WebUI hostname) — nginx cannot distinguish box from browser
+otherwise (maintainer decision 2026-07; revisit single-port UX in v2.0.0, e.g. store
+`box_hostname` in state and let the doctor detect SNI collisions).
