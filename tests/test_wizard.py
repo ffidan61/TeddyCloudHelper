@@ -296,6 +296,56 @@ def test_setup_letsencrypt_aborts_when_probe_fails_and_user_declines(tmp_path, m
     assert state_mod.load_state(tmp_path).webui_tls_mode == "selfsigned"
 
 
+def test_step_protection_offers_basic_auth(tmp_path, monkeypatch):
+    # An unprotected WebUI trips TeddyCloud's security-mitigation lock —
+    # the wizard must not end without at least offering protection.
+    from teddycloudhelper import security
+
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+    answer_confirm(monkeypatch, True)
+    answer_text(monkeypatch, "admin")
+    monkeypatch.setattr(ui, "ask_password", lambda *a, **kw: "secret")
+    monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
+    quiet_panels(monkeypatch)
+
+    wizard.step_protection(state, tmp_path)
+
+    assert state.basic_auth_enabled is True
+    assert security.load_users(tmp_path) == ["admin"]
+
+
+def test_step_protection_declined_changes_nothing(tmp_path, monkeypatch):
+    from teddycloudhelper import security
+
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+    answer_confirm(monkeypatch, False)
+    monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
+    quiet_panels(monkeypatch)
+
+    wizard.step_protection(state, tmp_path)
+
+    assert state.basic_auth_enabled is False
+    assert security.load_users(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        AppState(basic_auth_enabled=True),
+        AppState(webui_client_cert_auth=True),
+        AppState(ip_allowlist=["192.168.0.0/24"]),
+    ],
+)
+def test_step_protection_skips_when_already_protected(tmp_path, monkeypatch, state):
+    def boom(*a, **kw):
+        raise AssertionError("must not prompt")
+
+    monkeypatch.setattr(ui, "confirm", boom)
+    monkeypatch.setattr(ui, "error_panel", boom)
+
+    wizard.step_protection(state, tmp_path)  # no prompts, no changes
+
+
 def test_render_project_direct(tmp_path):
     rendered = wizard.render_project(AppState(), tmp_path)
     assert rendered == [tmp_path / "docker-compose.yml"]

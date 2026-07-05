@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from teddycloudhelper import docker_cli, render, ui
+from teddycloudhelper import docker_cli, render, security, ui
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import ca, client_certs, crl, letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
@@ -146,6 +146,31 @@ def step_first_client_cert(state: AppState, project_dir: Path) -> None:
         f"Import this file into your browser: {info.p12_path}",
         title="Client certificate issued",
     )
+
+
+def step_protection(state: AppState, project_dir: Path) -> None:
+    """nginx mode: never leave the WebUI wide open. An unprotected public
+    WebUI trips TeddyCloud's security-mitigation lock (which also cuts off
+    the boxes) and exposes the irreplaceable box certificates."""
+    if state.basic_auth_enabled or state.webui_client_cert_auth or state.ip_allowlist:
+        return
+    ui.error_panel(
+        "The WebUI currently has NO access protection. Once internet "
+        "scanners find it, TeddyCloud locks itself (the boxes stop working "
+        "too) and anybody could download your box certificates.",
+        title="WebUI unprotected",
+    )
+    if not ui.confirm("Enable Basic Auth (username/password) now?", default=True):
+        ui.info_panel(
+            "OK — consider client certificates or the IP allowlist in the "
+            "security menu before exposing the WebUI to the internet."
+        )
+        return
+    username = ui.ask_text("Username:")
+    password = ui.ask_password("Password:")
+    security.set_user(project_dir, username, password)
+    state.basic_auth_enabled = True
+    ui.info_panel(f"Basic Auth enabled; user {username!r} created.")
 
 
 def step_letsencrypt(state: AppState) -> str | None:
@@ -291,6 +316,7 @@ def run() -> None:
         step_webui(state)
         step_webui_auth(state, project_dir)
         step_first_client_cert(state, project_dir)
+        step_protection(state, project_dir)
         le = step_letsencrypt(state)
 
     state_mod.save_state(state, project_dir)
