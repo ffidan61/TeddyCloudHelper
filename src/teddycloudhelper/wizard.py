@@ -117,10 +117,18 @@ def step_webui_auth(state: AppState, project_dir: Path) -> None:
             f"Self-signed WebUI certificate for {state.webui_hostname} created in "
             f"{server_certs.server_dir(project_dir)}."
         )
-    state.webui_client_cert_auth = ui.confirm(
-        "Require client certificates for the WebUI (own CA, browser .p12)?",
-        default=state.webui_client_cert_auth,
-    )
+    if state.webui_client_cert_auth:
+        # Already configured — don't re-ask on every reconfiguration; the
+        # security menu has the toggle to turn it off.
+        ui.info_panel(
+            "Client-certificate auth stays enabled (change it in the "
+            "security menu)."
+        )
+    else:
+        state.webui_client_cert_auth = ui.confirm(
+            "Require client certificates for the WebUI (own CA, browser .p12)?",
+            default=False,
+        )
     if state.webui_client_cert_auth and not ca.ca_exists(project_dir):
         ca.create_ca(project_dir)
         crl.ensure_crl(project_dir)
@@ -330,7 +338,16 @@ def run() -> None:
         step_webui_auth(state, project_dir)
         step_first_client_cert(state, project_dir)
         step_protection(state, project_dir)
-        le = step_letsencrypt(state)
+        if state.webui_tls_mode == "letsencrypt" and letsencrypt.cert_exists(
+            project_dir, state.webui_hostname
+        ):
+            # Certificate already on disk — never re-request, never re-ask.
+            ui.info_panel(
+                f"Let's Encrypt certificate for {state.webui_hostname} is "
+                "already present — keeping it."
+            )
+        else:
+            le = step_letsencrypt(state)
 
     state_mod.save_state(state, project_dir)
     state_mod.save_last_project(project_dir)

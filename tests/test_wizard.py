@@ -98,6 +98,23 @@ def test_step_webui_auth_creates_server_cert_and_ca(tmp_path, monkeypatch):
     assert crl.crl_path(tmp_path).is_file()
 
 
+def test_step_webui_auth_does_not_reask_when_enabled(tmp_path, monkeypatch):
+    # Reconfiguration must not nag about an option that is already on —
+    # the security menu owns the toggle.
+    state = AppState(webui_hostname="tc.home.arpa", webui_client_cert_auth=True)
+    quiet_panels(monkeypatch)
+
+    def boom(*a, **kw):
+        raise AssertionError("must not prompt")
+
+    monkeypatch.setattr(ui, "confirm", boom)
+
+    wizard.step_webui_auth(state, tmp_path)
+
+    assert state.webui_client_cert_auth is True
+    assert ca.ca_exists(tmp_path)  # CA still ensured
+
+
 def test_step_webui_auth_declined_creates_no_ca(tmp_path, monkeypatch):
     state = AppState(webui_hostname="tc.home.arpa")
     answer_confirm(monkeypatch, False)
