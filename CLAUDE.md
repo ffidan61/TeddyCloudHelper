@@ -40,6 +40,13 @@ uv run pytest tests/test_state.py::test_save_then_load_roundtrip   # single test
   libs — CycloneSSL, FatFs — never in TeddyCloud's own code). Box client-cert validation
   is purely TLS-level; boxes are identified by the cert CN (the MAC address). Therefore
   all revocation UX targets **nginx** (`ssl_crl`), never TeddyCloud itself.
+- **TeddyCloud's HTTP server drops request-body bytes that arrive in the same burst as
+  the headers** (verified 2026-07 with a curl matrix: with `Expect: 100-continue` a 16 MB
+  upload finishes in 1.6s; without it — any HTTP version — the server stalls ~120s and
+  closes without a response). Any proxy in front of it MUST stream request bodies
+  (`proxy_request_buffering off`), never buffer them.
+- TeddyCloud serves web routes on ports 80/8443 only; **port 443 is an API-only listener**
+  (`api_access_only`) that answers all WebUI/API-web routes with 404 "File not found".
 
 ## Architecture
 
