@@ -1,5 +1,7 @@
 """Headless --doctor mode: cron-friendly exit codes, no prompts."""
 
+import json
+
 from teddycloudhelper import cli, doctor
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.doctor import CheckResult
@@ -41,6 +43,31 @@ def test_doctor_exit_two_without_project(tmp_path, monkeypatch):
 def test_doctor_exit_two_without_state(tmp_path):
     # Directory exists but is not a TeddyCloudHelper project.
     assert cli.main(["--doctor", "--project", str(tmp_path)]) == 2
+
+
+def test_doctor_json_prints_machine_readable_results(tmp_path, monkeypatch, capsys):
+    project = make_project(tmp_path)
+    results = [CheckResult("X", "ok", "fine"), CheckResult("Y", "fail", "broken")]
+    monkeypatch.setattr(doctor, "run_checks", lambda *a, **kw: results)
+
+    exit_code = cli.main(["--doctor", "--json", "--project", str(project)])
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == [
+        {"name": "X", "status": "ok", "detail": "fine"},
+        {"name": "Y", "status": "fail", "detail": "broken"},
+    ]
+
+
+def test_doctor_json_error_without_project(monkeypatch, capsys):
+    monkeypatch.setattr(state_mod, "load_last_project", lambda: None)
+
+    exit_code = cli.main(["--doctor", "--json"])
+
+    assert exit_code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert "error" in payload
 
 
 def test_doctor_records_ca_fingerprint(tmp_path, monkeypatch):

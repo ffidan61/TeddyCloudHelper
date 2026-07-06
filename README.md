@@ -50,7 +50,7 @@ teddycloudhelper
 ```
 
 Requires Python 3.11+ and Docker with the Compose v2 plugin on the host.
-Pin a version with `...TeddyCloudHelper@v0.11.1` (see tags / `CHANGELOG.md`).
+Pin a version with `...TeddyCloudHelper@v0.13.0` (see tags / `CHANGELOG.md`).
 
 ## Monitoring via cron
 

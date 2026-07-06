@@ -93,6 +93,16 @@ def test_nginx_conf_all_security_features(tmp_path):
     assert_nginx_ok(tmp_path)
 
 
+def test_nginx_conf_satisfy_any_bypass(tmp_path):
+    make_nginx_project(
+        tmp_path,
+        basic_auth_enabled=True,
+        ip_allowlist=["192.168.0.0/24", "10.0.0.5"],
+        ip_bypasses_basic_auth=True,
+    )
+    assert_nginx_ok(tmp_path)
+
+
 def test_nginx_conf_letsencrypt(tmp_path):
     make_nginx_project(tmp_path, webui_tls_mode="letsencrypt", letsencrypt_enabled=True)
     assert_nginx_ok(tmp_path)

@@ -12,6 +12,7 @@ DIRECT = {
     "webui_client_cert_auth": False,
     "basic_auth_enabled": False,
     "ip_allowlist": [],
+    "ip_bypasses_basic_auth": False,
     "webui_tls_mode": "selfsigned",
     "letsencrypt_enabled": False,
 }
@@ -121,7 +122,9 @@ def test_nginx_shared_uses_sni_split():
 def test_nginx_separate_passes_443_through():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
     assert "proxy_pass teddycloud:443;" in text
-    assert "ssl_preread" not in text
+    # ssl_preread is on here too (SNI ends up in the access log), but routing
+    # stays hardcoded — no map, unlike the shared-443 SNI split.
+    assert "map $ssl_preread_server_name" not in text
     assert "listen 8443 ssl;" in text
 
 
@@ -130,6 +133,15 @@ def test_nginx_box_path_is_never_terminated():
         text = render.render_template("nginx.conf.j2", context)
         stream_block = text.split("http {")[0]
         assert "ssl_certificate" not in stream_block  # passthrough only
+
+
+def test_nginx_stream_logs_sni_and_backend():
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        stream_block = text.split("http {")[0]
+        assert "access_log /dev/stdout stream_route;" in stream_block
+        assert "$ssl_preread_server_name" in stream_block
+        assert "$upstream_addr" in stream_block
 
 
 def test_nginx_allows_large_uploads_and_websockets():
@@ -193,6 +205,42 @@ def test_nginx_allowlist_guards_webui():
     # the box path (stream block) must never be restricted
     stream_block = text.split("http {")[0]
     assert "deny" not in stream_block
+
+
+def test_nginx_satisfy_any_off_by_default():
+    # Both features on, but the bypass flag itself is off — nginx's default
+    # (both required) must apply, no `satisfy` directive at all.
+    context = NGINX_SEPARATE | {
+        "basic_auth_enabled": True,
+        "ip_allowlist": ["192.168.0.0/24"],
+    }
+    text = render.render_template("nginx.conf.j2", context)
+    assert "satisfy" not in text
+
+
+def test_nginx_satisfy_any_needs_both_features():
+    # The bypass flag alone, without one of the two features, must not
+    # render `satisfy any` — there would be nothing to bypass.
+    only_auth = NGINX_SEPARATE | {"basic_auth_enabled": True, "ip_bypasses_basic_auth": True}
+    only_allowlist = NGINX_SEPARATE | {
+        "ip_allowlist": ["192.168.0.0/24"],
+        "ip_bypasses_basic_auth": True,
+    }
+    for context in (only_auth, only_allowlist):
+        assert "satisfy any;" not in render.render_template("nginx.conf.j2", context)
+
+
+def test_nginx_satisfy_any_when_bypass_enabled():
+    context = NGINX_SEPARATE | {
+        "basic_auth_enabled": True,
+        "ip_allowlist": ["192.168.0.0/24"],
+        "ip_bypasses_basic_auth": True,
+    }
+    text = render.render_template("nginx.conf.j2", context)
+    assert text.count("satisfy any;") == 1
+    # satisfy must land in the WebUI server block, not the box-facing stream.
+    stream_block = text.split("http {")[0]
+    assert "satisfy" not in stream_block
 
 
 def test_nginx_acme_challenge_always_served():

@@ -12,6 +12,15 @@ events {
 }
 
 stream {
+    # Route visibility for port 443: which SNI a client presented and which
+    # backend nginx picked for it. Goes to stdout so `docker compose logs
+    # nginx` shows it directly — cuts SNI-routing debugging from hours to
+    # minutes (see CLAUDE.md, 2026-07-05 incident).
+    log_format stream_route '$time_local $remote_addr sni="$ssl_preread_server_name" '
+                             'backend=$upstream_addr status=$status '
+                             'bytes=$bytes_sent/$bytes_received time=$session_time';
+    access_log /dev/stdout stream_route;
+
 {%- if webui_port_mode == "shared" %}
     # SNI split: the WebUI hostname is terminated locally (loopback server
     # below); everything else — including boxes that send no SNI at all —
@@ -28,9 +37,11 @@ stream {
         proxy_pass $upstream_443;
     }
 {%- else %}
-    # Separate WebUI port: all of 443 belongs to the box path.
+    # Separate WebUI port: all of 443 belongs to the box path. ssl_preread
+    # is only enabled here for the access log above — routing is fixed.
     server {
         listen 443;
+        ssl_preread on;
         proxy_pass teddycloud:443;
     }
 {%- endif %}
@@ -93,6 +104,10 @@ http {
         listen {{ webui_port }} ssl;
 {%- endif %}
         server_name {{ webui_hostname }};
+{%- if ip_allowlist and basic_auth_enabled and ip_bypasses_basic_auth %}
+        # Allowed IPs skip the password; everyone else still needs it.
+        satisfy any;
+{%- endif %}
 {%- if ip_allowlist %}
 {%- for entry in ip_allowlist %}
         allow {{ entry }};

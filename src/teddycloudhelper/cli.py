@@ -7,7 +7,9 @@ non-zero when any check fails.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 
 from rich.panel import Panel
@@ -91,23 +93,32 @@ def _dispatch(action: str) -> bool:
     return True
 
 
-def _headless_doctor(project: Path | None) -> int:
+def _headless_doctor(project: Path | None, json_output: bool = False) -> int:
     """Run the checks without prompts; exit 1 on failures, 2 on setup errors."""
     project = project or state_mod.load_last_project()
     if project is None or not project.is_dir():
-        ui.error_panel(
-            "No project found — pass --project /path/to/your/teddycloud/project."
-        )
+        message = "No project found — pass --project /path/to/your/teddycloud/project."
+        if json_output:
+            print(json.dumps({"error": message}))
+        else:
+            ui.error_panel(message)
         return 2
     try:
         state = state_mod.load_state(project)
     except state_mod.StateError as exc:
-        ui.error_panel(str(exc))
+        if json_output:
+            print(json.dumps({"error": str(exc)}))
+        else:
+            ui.error_panel(str(exc))
         return 2
-    ui.console.print(f"Checking [bold]{project}[/bold]…")
+    if not json_output:
+        ui.console.print(f"Checking [bold]{project}[/bold]…")
     results = doctor.run_checks(project, state)
     state_mod.save_state(state, project)  # CA fingerprint recording
-    doctor_menu.show_results(results)
+    if json_output:
+        print(json.dumps([asdict(r) for r in results], indent=2))
+    else:
+        doctor_menu.show_results(results)
     return 1 if any(r.status == "fail" for r in results) else 0
 
 
@@ -128,9 +139,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="project directory for --doctor (default: the last used project)",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="with --doctor, print results as JSON instead of a table "
+        "(for Uptime Kuma, Healthchecks.io, or other scripts)",
+    )
     args = parser.parse_args(argv)
     if args.doctor:
-        return _headless_doctor(args.project)
+        return _headless_doctor(args.project, args.json)
 
     console = ui.console
     console.print(

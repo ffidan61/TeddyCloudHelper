@@ -25,6 +25,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Remove a Basic Auth user", "remove_user"),
     ("Add an IP allowlist entry", "add_ip"),
     ("Remove an IP allowlist entry", "remove_ip"),
+    ("Let allowed IPs skip Basic Auth (satisfy any)", "toggle_bypass"),
     ("Back to project settings", "back"),
 ]
 
@@ -38,6 +39,11 @@ def _status(state: AppState, project: Path) -> None:
         f"WebUI client certificates: "
         f"{'required' if state.webui_client_cert_auth else 'not required'}",
     ]
+    if state.basic_auth_enabled and state.ip_allowlist:
+        lines.append(
+            "Allowed IPs bypass Basic Auth: "
+            + ("yes (satisfy any)" if state.ip_bypasses_basic_auth else "no (both required)")
+        )
     if state.deployment_mode != "nginx":
         lines.append(
             "\n[bold red]Deployment mode is 'direct' — these settings are only "
@@ -72,6 +78,9 @@ def _toggle_auth(state: AppState, project: Path) -> None:
         if not ui.confirm("Basic Auth is enabled. Disable it?", default=False):
             return
         state.basic_auth_enabled = False
+        # Stale otherwise: re-enabling Basic Auth later would silently bring
+        # the bypass back with it.
+        state.ip_bypasses_basic_auth = False
     else:
         if not security.load_users(project):
             ui.info_panel("No users yet — create the first one.")
@@ -107,6 +116,27 @@ def _toggle_client_cert(state: AppState, project: Path) -> None:
             crl.ensure_crl(project)
             ui.info_panel("WebUI CA + empty CRL created.")
         wizard.step_first_client_cert(state, project)
+    _apply(state, project)
+
+
+def _toggle_bypass(state: AppState, project: Path) -> None:
+    if not (state.basic_auth_enabled and state.ip_allowlist):
+        ui.error_panel(
+            "This needs both Basic Auth and at least one IP allowlist entry "
+            "enabled first — otherwise there is nothing to bypass."
+        )
+        return
+    if state.ip_bypasses_basic_auth:
+        state.ip_bypasses_basic_auth = False
+        ui.info_panel("Allowed IPs now also need the password again (both required).")
+    else:
+        if not ui.confirm(
+            "Allowed IPs will get in WITHOUT a password (satisfy any). "
+            "Everyone else still needs one. Continue?",
+            default=False,
+        ):
+            return
+        state.ip_bypasses_basic_auth = True
     _apply(state, project)
 
 
@@ -167,6 +197,9 @@ def _remove_ip(state: AppState, project: Path) -> None:
     state.ip_allowlist.remove(entry)
     if not state.ip_allowlist:
         ui.info_panel("Allowlist is now empty — all IPs are allowed again.")
+        # Stale otherwise: adding a new entry later would silently bring the
+        # bypass back with it.
+        state.ip_bypasses_basic_auth = False
     _apply(state, project)
 
 
@@ -178,6 +211,7 @@ _HANDLERS = {
     "remove_user": _remove_user,
     "add_ip": _add_ip,
     "remove_ip": _remove_ip,
+    "toggle_bypass": _toggle_bypass,
 }
 
 

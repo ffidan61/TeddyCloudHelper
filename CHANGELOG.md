@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.0
+
+- Stream-level access log on port 443: SNI (`$ssl_preread_server_name`) and
+  chosen backend (`$upstream_addr`) go to stdout (`docker compose logs
+  nginx`) — cuts SNI-routing debugging from hours to minutes
+- `teddycloudhelper --doctor --json` — machine-readable check results for
+  Uptime Kuma, Healthchecks.io, or custom scripts
+- Security menu: allowed IPs can now bypass Basic Auth (`satisfy any`) —
+  LAN IPs get in without a password, everyone else still needs one; off by
+  default, only offered once both Basic Auth and an IP allowlist are set
+- CI now runs the opt-in Docker integration tests
+  (`TCH_DOCKER_TESTS=1 pytest -m docker`) on every push/PR — `ubuntu-latest`
+  ships Docker already, only `nginx:stable-alpine` needs pulling
+
 ## v0.12.0
 
 - nginx config is validated with `nginx -t` in a throwaway container before

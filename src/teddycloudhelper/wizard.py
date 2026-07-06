@@ -316,6 +316,7 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         "webui_client_cert_auth": state.webui_client_cert_auth,
         "basic_auth_enabled": state.basic_auth_enabled,
         "ip_allowlist": state.ip_allowlist,
+        "ip_bypasses_basic_auth": state.ip_bypasses_basic_auth,
         "webui_tls_mode": state.webui_tls_mode,
         "letsencrypt_enabled": state.letsencrypt_enabled,
     }

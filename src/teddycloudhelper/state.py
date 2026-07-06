@@ -67,6 +67,9 @@ class AppState:
     letsencrypt_enabled: bool = False
     basic_auth_enabled: bool = False
     ip_allowlist: list[str] = field(default_factory=list)
+    # When both the allowlist and Basic Auth are on: False = nginx's default
+    # (both must pass); True = `satisfy any` (allowed IPs skip the password).
+    ip_bypasses_basic_auth: bool = False
     # Monotone serial counter for issued client certificates.
     next_serial: int = 1
     # SHA-256 of certs/server/ca.der when last seen — flashed boxes trust
