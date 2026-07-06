@@ -57,7 +57,7 @@ def install_instance_ca(tmp_path, cert) -> None:
 
 def test_scan_finds_embedded_certs(tmp_path):
     ca = make_cert("TeddyCloud CA Root Cert.")
-    box = make_cert("DCDA0C40B7F8", "Boxine Factory SubCA 14", "Boxine GmbH")
+    box = make_cert("AABBCCDDEEFF", "Boxine Factory SubCA 14", "Boxine GmbH")
     image = make_image(tmp_path, ca, box)
     found = firmware.scan_certificates(image)
     assert {c.serial_number for c in found} == {ca.serial_number, box.serial_number}
@@ -65,14 +65,14 @@ def test_scan_finds_embedded_certs(tmp_path):
 
 def test_check_image_matching_ca(tmp_path):
     ca = make_cert("TeddyCloud CA Root Cert.")
-    box = make_cert("DCDA0C40B7F8", "Boxine Factory SubCA 14", "Boxine GmbH")
+    box = make_cert("AABBCCDDEEFF", "Boxine Factory SubCA 14", "Boxine GmbH")
     install_instance_ca(tmp_path, ca)
     image = make_image(tmp_path, ca, box)
 
     result = firmware.check_image(tmp_path, image)
 
     assert result.ca_match is True
-    assert result.box_cert_cn == "DCDA0C40B7F8"
+    assert result.box_cert_cn == "AABBCCDDEEFF"
     assert result.instance_ca_serial == ca.serial_number
 
 
@@ -92,14 +92,14 @@ def test_check_image_foreign_ca(tmp_path):
 def test_check_image_without_ca(tmp_path):
     # Only the Boxine cert (e.g. an unpatched dump): no CA to compare.
     instance_ca = make_cert("TeddyCloud CA Root Cert.")
-    box = make_cert("DCDA0C40B7F8", "Boxine Factory SubCA 14", "Boxine GmbH")
+    box = make_cert("AABBCCDDEEFF", "Boxine Factory SubCA 14", "Boxine GmbH")
     install_instance_ca(tmp_path, instance_ca)
     image = make_image(tmp_path, box)
 
     result = firmware.check_image(tmp_path, image)
 
     assert result.ca_match is None
-    assert result.box_cert_cn == "DCDA0C40B7F8"
+    assert result.box_cert_cn == "AABBCCDDEEFF"
 
 
 def test_list_images_newest_first(tmp_path):
