@@ -44,13 +44,16 @@ reimplemented from scratch in Python.
 
 ## Installation
 
+This repo is private, so install over SSH (needs a GitHub SSH key set up already):
+
 ```sh
-uv tool install git+https://github.com/ffidan61/TeddyCloudHelper
+uv tool install "git+ssh://git@github.com/ffidan61/TeddyCloudHelper"
 teddycloudhelper
 ```
 
 Requires Python 3.11+ and Docker with the Compose v2 plugin on the host.
-Pin a version with `...TeddyCloudHelper@v0.13.1` (see tags / `CHANGELOG.md`).
+Pin a version with `"...TeddyCloudHelper@v0.13.1"` (see tags / `CHANGELOG.md`).
+To upgrade an existing install, add `--force`.
 
 ## Monitoring via cron
 
