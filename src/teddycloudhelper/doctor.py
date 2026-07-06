@@ -73,6 +73,11 @@ class Probes:
     # undeterminable — docker missing, registry unreachable, never pulled).
     local_image_digest: Callable[[str], str | None]
     remote_image_digest: Callable[[str], str | None]
+    # Human-readable version: the running image's OCI version label and the
+    # newest TeddyCloud GitHub release (None if undeterminable). Purely
+    # informational — the digest comparison above is the source of truth.
+    local_image_version: Callable[[str], str | None] = lambda image: None
+    latest_teddycloud_release: Callable[[], str | None] = lambda: None
 
 
 # --- default (real) probe implementations ------------------------------------
@@ -173,6 +178,39 @@ def _remote_image_digest(image: str) -> str | None:
         return None
 
 
+def _local_image_version(image: str) -> str | None:
+    """The running image's ``org.opencontainers.image.version`` label."""
+    try:
+        result = subprocess.run(
+            [
+                "docker", "image", "inspect", "--format",
+                '{{index .Config.Labels "org.opencontainers.image.version"}}',
+                image,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _latest_teddycloud_release() -> str | None:
+    """The newest TeddyCloud GitHub release tag (anonymous, best-effort)."""
+    try:
+        request = urllib.request.Request(
+            "https://api.github.com/repos/toniebox-reverse-engineering/"
+            "teddycloud/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "TeddyCloudHelper"},
+        )
+        with urllib.request.urlopen(request, timeout=_PROBE_TIMEOUT) as response:
+            return json.load(response).get("tag_name") or None
+    except (OSError, ValueError):
+        return None
+
+
 def default_probes(project_dir: Path) -> Probes:
     compose = docker_cli.Compose(project_dir)
 
@@ -192,6 +230,8 @@ def default_probes(project_dir: Path) -> Probes:
         getboxes=getboxes,
         local_image_digest=_local_image_digest,
         remote_image_digest=_remote_image_digest,
+        local_image_version=_local_image_version,
+        latest_teddycloud_release=_latest_teddycloud_release,
     )
 
 
@@ -216,6 +256,24 @@ def check_containers(probes: Probes) -> CheckResult:
     if stopped:
         listing = ", ".join(f"{svc.service} ({svc.state})" for svc in stopped)
         return CheckResult("Containers", "fail", f"Not running: {listing}.")
+    unhealthy = [svc for svc in services if svc.health == "unhealthy"]
+    if unhealthy:
+        listing = ", ".join(svc.service for svc in unhealthy)
+        return CheckResult(
+            "Containers",
+            "fail",
+            f"Running but unhealthy (failing its healthcheck): {listing} — "
+            "check its logs.",
+        )
+    starting = [svc for svc in services if svc.health == "starting"]
+    if starting:
+        listing = ", ".join(svc.service for svc in starting)
+        return CheckResult(
+            "Containers",
+            "warn",
+            f"Still starting (healthcheck not green yet): {listing} — "
+            "first-start certificate generation can take minutes.",
+        )
     return CheckResult("Containers", "ok", f"All {len(services)} container(s) running.")
 
 
@@ -497,16 +555,41 @@ def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
         return CheckResult(
             name, "warn", "Could not query the registry (offline?) — skipping."
         )
+    version_note = _teddycloud_version_note(state, probes, image)
     if local != remote:
         return CheckResult(
             name,
             "warn",
             f"A newer {state.teddycloud_image_tag!r} image is available — "
-            "use 'Pull latest images' in the Docker menu.",
+            "use 'Pull latest images' in the Docker menu." + version_note,
         )
     return CheckResult(
-        name, "ok", f"Running the newest {state.teddycloud_image_tag!r} image."
+        name,
+        "ok",
+        f"Running the newest {state.teddycloud_image_tag!r} image." + version_note,
     )
+
+
+def _teddycloud_version_note(state: AppState, probes: Probes, image: str) -> str:
+    """Human-readable running-vs-latest version, appended to the detail.
+
+    Empty when nothing is known. The GitHub-release comparison only makes
+    sense on the ``latest`` channel — a ``develop`` build has no matching
+    release tag, so the digest comparison above stays the sole measure there.
+    """
+    running = probes.local_image_version(image)
+    if state.teddycloud_image_tag != "latest":
+        return f" Running {running}." if running else ""
+    latest = probes.latest_teddycloud_release()
+    if running and latest:
+        if running != latest:
+            return f" Running {running}; latest release {latest}."
+        return f" Running {running} (latest release)."
+    if running:
+        return f" Running {running}."
+    if latest:
+        return f" Latest release {latest}."
+    return ""
 
 
 def check_ca_identity(project_dir: Path, state: AppState) -> CheckResult:

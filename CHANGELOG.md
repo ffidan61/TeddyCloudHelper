@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.12.0
+
+- nginx config is validated with `nginx -t` in a throwaway container before
+  every (re)start; a broken render is rolled back to its last good `.bak`
+  and the restart is aborted, so a template regression can never take the
+  box path down
+- teddycloud compose service has a `curl /api/stats` healthcheck; the doctor
+  reports "unhealthy" (fail) and "starting" (warn) from `compose ps`
+- Startup shows an update hint when a newer version is tagged on GitHub
+  (best-effort, 2s timeout, silent on failure)
+- Doctor image-freshness check adds a human-readable version line (running
+  image's OCI version label vs. the latest TeddyCloud GitHub release; the
+  release comparison is skipped on the `develop` channel)
+
 ## v0.11.1
 
 - Doctor: image-freshness check (local digest vs. ghcr registry) with a

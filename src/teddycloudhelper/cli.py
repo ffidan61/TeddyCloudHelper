@@ -12,7 +12,7 @@ from pathlib import Path
 
 from rich.panel import Panel
 
-from teddycloudhelper import __version__, doctor, ui, wizard
+from teddycloudhelper import __version__, doctor, ui, updates, wizard
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import letsencrypt
 from teddycloudhelper.certs.ca import CertError
@@ -139,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
             border_style="cyan",
         )
     )
+
+    notice = updates.update_notice(__version__)
+    if notice:
+        console.print(f"[yellow]{notice}[/yellow]")
 
     for warning in preflight():
         ui.error_panel(warning, title="Preflight warning")

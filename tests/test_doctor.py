@@ -89,6 +89,28 @@ def test_containers_docker_error_fails():
     assert "daemon down" in result.detail
 
 
+def test_containers_unhealthy_fails():
+    probes = make_probes(
+        ps=lambda: [
+            ServiceStatus("teddycloud", "teddycloud", "running", "Up (unhealthy)", "unhealthy")
+        ]
+    )
+    result = doctor.check_containers(probes)
+    assert result.status == "fail"
+    assert "unhealthy" in result.detail
+
+
+def test_containers_starting_warns():
+    probes = make_probes(
+        ps=lambda: [
+            ServiceStatus("teddycloud", "teddycloud", "running", "Up (starting)", "starting")
+        ]
+    )
+    result = doctor.check_containers(probes)
+    assert result.status == "warn"
+    assert "starting" in result.detail.lower()
+
+
 # --- ports ---------------------------------------------------------------------
 
 
@@ -370,6 +392,43 @@ def test_image_freshness_degrades_without_data():
     assert doctor.check_image_freshness(AppState(), no_local).status == "warn"
     no_remote = make_probes(remote_image_digest=lambda image: None)
     assert doctor.check_image_freshness(AppState(), no_remote).status == "warn"
+
+
+def test_image_freshness_notes_running_and_latest_release():
+    probes = make_probes(
+        local_image_version=lambda image: "tc_v0.6.8",
+        latest_teddycloud_release=lambda: "tc_v0.6.9",
+    )
+    result = doctor.check_image_freshness(AppState(teddycloud_image_tag="latest"), probes)
+    assert "Running tc_v0.6.8" in result.detail
+    assert "latest release tc_v0.6.9" in result.detail
+
+
+def test_image_freshness_notes_running_is_latest():
+    probes = make_probes(
+        local_image_version=lambda image: "tc_v0.6.9",
+        latest_teddycloud_release=lambda: "tc_v0.6.9",
+    )
+    result = doctor.check_image_freshness(AppState(teddycloud_image_tag="latest"), probes)
+    assert "tc_v0.6.9 (latest release)" in result.detail
+
+
+def test_image_freshness_develop_channel_skips_release_comparison():
+    # On develop a GitHub release tag would be misleading; the digest above
+    # is the measure, so only the running version is mentioned.
+    probes = make_probes(
+        local_image_version=lambda image: "tc_v0.7.0-dev",
+        latest_teddycloud_release=lambda: "tc_v0.6.9",
+    )
+    result = doctor.check_image_freshness(AppState(teddycloud_image_tag="develop"), probes)
+    assert "Running tc_v0.7.0-dev" in result.detail
+    assert "latest release" not in result.detail
+
+
+def test_image_freshness_version_note_absent_without_data():
+    # The default probes return None for the version — no appended note.
+    result = doctor.check_image_freshness(AppState(), make_probes())
+    assert result.detail == "Running the newest 'latest' image."
 
 
 # --- CA identity / backup ---------------------------------------------------------

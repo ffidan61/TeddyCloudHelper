@@ -198,3 +198,52 @@ def test_find_compose_file_none(tmp_path):
 def test_default_runner_missing_binary(tmp_path):
     with pytest.raises(docker_cli.DockerError, match="Could not run"):
         docker_cli._default_runner(["definitely-not-a-real-binary-xyz"], tmp_path)
+
+
+# --- nginx_config_test --------------------------------------------------------
+
+
+def _nginx_project(tmp_path):
+    (tmp_path / "nginx").mkdir()
+    (tmp_path / "nginx" / "nginx.conf").write_text("events {}\n")
+    (tmp_path / "webui-pki").mkdir()
+
+
+def test_nginx_config_test_builds_docker_run_args(tmp_path):
+    _nginx_project(tmp_path)
+    runner = FakeRunner(completed(returncode=0, stderr="test is successful"))
+
+    result = docker_cli.nginx_config_test(tmp_path, runner=runner)
+
+    assert result.returncode == 0
+    args, cwd = runner.calls[0]
+    assert cwd == tmp_path
+    assert args[:3] == ["docker", "run", "--rm"]
+    assert "--add-host" in args and "teddycloud:127.0.0.1" in args
+    assert f"{tmp_path / 'nginx' / 'nginx.conf'}:/etc/nginx/nginx.conf:ro" in args
+    assert args[-3:] == [docker_cli.NGINX_IMAGE, "nginx", "-t"]
+    # security / letsencrypt not present -> not mounted
+    assert not any("/etc/teddycloudhelper/security" in a for a in args)
+    assert not any("/etc/letsencrypt" in a for a in args)
+
+
+def test_nginx_config_test_mounts_optional_dirs_when_present(tmp_path):
+    _nginx_project(tmp_path)
+    (tmp_path / "security").mkdir()
+    (tmp_path / "letsencrypt").mkdir()
+    runner = FakeRunner(completed(returncode=0))
+
+    docker_cli.nginx_config_test(tmp_path, runner=runner)
+
+    args = runner.calls[0][0]
+    assert any(a.endswith("/etc/teddycloudhelper/security:ro") for a in args)
+    assert any(a.endswith("/etc/letsencrypt:ro") for a in args)
+
+
+def test_nginx_config_test_returns_none_when_docker_unavailable(tmp_path):
+    _nginx_project(tmp_path)
+
+    def boom(args, cwd):
+        raise docker_cli.DockerError("Could not run 'docker'")
+
+    assert docker_cli.nginx_config_test(tmp_path, runner=boom) is None

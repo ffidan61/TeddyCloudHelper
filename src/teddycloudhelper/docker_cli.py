@@ -49,6 +49,41 @@ def _default_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
         raise DockerError(f"Could not run {args[0]!r}: {exc}") from exc
 
 
+# The image whose `nginx -t` validates a rendered config; matches the
+# deployment image so the directive set is identical.
+NGINX_IMAGE = "nginx:stable-alpine"
+
+
+def nginx_config_test(
+    project_dir: Path, runner: Runner | None = None
+) -> subprocess.CompletedProcess | None:
+    """Validate a rendered ``nginx.conf`` in a throwaway container (``nginx -t``).
+
+    Mounts the same files the real nginx container gets, so cert paths and
+    includes resolve exactly as they will at runtime. Returns the completed
+    process (inspect ``returncode``/``stderr``), or ``None`` when Docker
+    itself cannot be run — the caller then can't validate and must not block.
+    """
+    conf = project_dir / "nginx" / "nginx.conf"
+    args = [
+        "docker", "run", "--rm",
+        # nginx resolves the compose service name at config-check time.
+        "--add-host", "teddycloud:127.0.0.1",
+        "-v", f"{conf}:/etc/nginx/nginx.conf:ro",
+        "-v", f"{project_dir / 'webui-pki'}:/etc/teddycloudhelper/webui-pki:ro",
+    ]
+    if (project_dir / "security").is_dir():
+        args += ["-v", f"{project_dir / 'security'}:/etc/teddycloudhelper/security:ro"]
+    if (project_dir / "letsencrypt").is_dir():
+        args += ["-v", f"{project_dir / 'letsencrypt'}:/etc/letsencrypt:ro"]
+    args += [NGINX_IMAGE, "nginx", "-t"]
+    run = runner or _default_runner
+    try:
+        return run(args, project_dir)
+    except DockerError:
+        return None
+
+
 def _default_stream_runner(args: list[str], cwd: Path) -> None:
     # Inherits the terminal; Ctrl-C stops the stream and returns to the menu.
     try:

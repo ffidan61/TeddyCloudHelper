@@ -56,6 +56,9 @@ def _apply(state: AppState, project: Path) -> None:
     rendered = wizard.render_project(state, project)
     ui.console.print("Re-rendered: " + ", ".join(str(p) for p in rendered))
     if ui.confirm("Restart services now to apply the change?", default=True):
+        # Never restart nginx onto a broken config — it would take the box
+        # path down with it. Rolls back to the last good .bak on failure.
+        wizard.check_nginx_before_restart(project)
         compose = docker_cli.Compose(project)
         compose.up()
         compose.restart()

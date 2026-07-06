@@ -56,6 +56,9 @@ def _apply(state: AppState, project: Path) -> None:
 
 
 def _restart(project: Path) -> None:
+    # Never restart nginx onto a broken config — it would take the box path
+    # down with it. Rolls back to the last good .bak on failure.
+    wizard.check_nginx_before_restart(project)
     # up + restart: the configs are bind-mounted, so when the compose
     # definition itself is unchanged, `up` leaves running containers alone
     # and nginx would keep serving the old config.

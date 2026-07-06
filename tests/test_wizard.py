@@ -407,3 +407,85 @@ def test_render_project_nginx_requires_hostname(tmp_path):
     with pytest.raises(ValueError, match="WebUI hostname"):
         wizard.render_project(state, tmp_path)
     assert not (tmp_path / "docker-compose.yml").exists()  # nothing half-written
+
+
+# --- check_nginx_before_restart -----------------------------------------------
+
+
+def _write_nginx_conf(tmp_path, text="events {}\n"):
+    (tmp_path / "nginx").mkdir(exist_ok=True)
+    conf = tmp_path / "nginx" / "nginx.conf"
+    conf.write_text(text)
+    return conf
+
+
+def test_check_nginx_noop_in_direct_mode(tmp_path, monkeypatch):
+    # No nginx.conf -> the validator must not even run.
+    def boom(*a, **kw):
+        raise AssertionError("must not validate")
+
+    monkeypatch.setattr(docker_cli, "nginx_config_test", boom)
+    wizard.check_nginx_before_restart(tmp_path)  # no raise
+
+
+def test_check_nginx_ok_config_passes(tmp_path, monkeypatch):
+    _write_nginx_conf(tmp_path)
+    monkeypatch.setattr(
+        docker_cli, "nginx_config_test", lambda p: subprocess.CompletedProcess([], 0)
+    )
+    wizard.check_nginx_before_restart(tmp_path)  # no raise
+
+
+def test_check_nginx_config_error_rolls_back_and_raises(tmp_path, monkeypatch):
+    conf = _write_nginx_conf(tmp_path, "BROKEN new config\n")
+    # A previous good version render_to_file would have left as a .bak.
+    backup = tmp_path / "nginx" / "nginx.conf.20260706-120000.bak"
+    backup.write_text("events {}\n# good\n")
+    monkeypatch.setattr(
+        docker_cli,
+        "nginx_config_test",
+        lambda p: subprocess.CompletedProcess(
+            [], 1, stderr="nginx: [emerg] unknown directive\nnginx: configuration test failed"
+        ),
+    )
+
+    with pytest.raises(docker_cli.DockerError, match="failed `nginx -t`"):
+        wizard.check_nginx_before_restart(tmp_path)
+
+    # rolled back to the last good config
+    assert conf.read_text() == "events {}\n# good\n"
+
+
+def test_check_nginx_config_error_without_backup_still_raises(tmp_path, monkeypatch):
+    _write_nginx_conf(tmp_path, "BROKEN\n")
+    monkeypatch.setattr(
+        docker_cli,
+        "nginx_config_test",
+        lambda p: subprocess.CompletedProcess([], 1, stderr="nginx: configuration test failed"),
+    )
+    with pytest.raises(docker_cli.DockerError):
+        wizard.check_nginx_before_restart(tmp_path)
+
+
+def test_check_nginx_unavailable_docker_is_noop(tmp_path, monkeypatch):
+    _write_nginx_conf(tmp_path)
+    monkeypatch.setattr(docker_cli, "nginx_config_test", lambda p: None)
+    wizard.check_nginx_before_restart(tmp_path)  # no raise, restart proceeds
+
+
+def test_check_nginx_infra_error_warns_but_proceeds(tmp_path, monkeypatch):
+    # docker run failed for a non-config reason -> don't block the restart.
+    _write_nginx_conf(tmp_path)
+    warnings = []
+    monkeypatch.setattr(ui, "warn_panel", lambda msg, **kw: warnings.append(msg))
+    monkeypatch.setattr(
+        docker_cli,
+        "nginx_config_test",
+        lambda p: subprocess.CompletedProcess(
+            [], 125, stderr="Cannot connect to the Docker daemon"
+        ),
+    )
+
+    wizard.check_nginx_before_restart(tmp_path)  # no raise
+
+    assert warnings and "Could not validate" in warnings[0]

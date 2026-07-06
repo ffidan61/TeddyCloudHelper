@@ -8,6 +8,7 @@ the standard cycle — save state, render templates (with ``.bak``), prompt for
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from teddycloudhelper import docker_cli, render, security, ui
@@ -330,6 +331,55 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
     return rendered
 
 
+def _rollback_nginx_conf(conf: Path) -> Path | None:
+    """Restore *conf* from its most recent timestamped ``.bak`` (the one
+    render_to_file wrote before overwriting). Returns it, or None if there
+    is no backup (e.g. the very first render)."""
+    backups = sorted(conf.parent.glob(f"{conf.name}.*.bak"))
+    if not backups:
+        return None
+    latest = backups[-1]
+    shutil.copy2(latest, conf)
+    return latest
+
+
+def check_nginx_before_restart(project_dir: Path) -> None:
+    """Validate the freshly rendered nginx.conf before (re)starting so a
+    broken template never takes the box path down with it.
+
+    No-op in direct mode (no nginx.conf). When ``nginx -t`` reports a real
+    config error, the file is rolled back to its last good ``.bak`` and a
+    :class:`~teddycloudhelper.docker_cli.DockerError` is raised so the caller
+    aborts the (re)start. When the check itself could not run (Docker
+    unavailable, image not pullable), it warns and lets the restart proceed —
+    validation is a safety net, not a gate.
+    """
+    conf = project_dir / NGINX_CONF_RELPATH
+    if not conf.is_file():
+        return
+    result = docker_cli.nginx_config_test(project_dir)
+    if result is None or result.returncode == 0:
+        return
+    message = (result.stderr or result.stdout or "").strip()
+    if "test failed" not in message and "nginx:" not in message:
+        # `docker run` failed for a reason other than the config (daemon
+        # down, image pull failed) — don't block a legitimate restart on our
+        # own inability to check it.
+        ui.warn_panel(
+            "Could not validate the nginx configuration before restarting "
+            f"(nginx -t did not run):\n{message}",
+            title="nginx check skipped",
+        )
+        return
+    restored = _rollback_nginx_conf(conf)
+    raise docker_cli.DockerError(
+        "The rendered nginx configuration failed `nginx -t` — the services "
+        "were NOT restarted, so the running config (and the box path) stays "
+        "up.\n\n" + message
+        + (f"\n\nRolled {conf.name} back to {restored.name}." if restored else "")
+    )
+
+
 def run() -> None:
     project_dir = step_project_dir()
     if state_mod.has_state(project_dir):
@@ -381,6 +431,7 @@ def run() -> None:
     if le is not None:
         setup_letsencrypt(project_dir, state, le)
     else:
+        check_nginx_before_restart(project_dir)
         compose = docker_cli.Compose(project_dir)
         was_running = _any_running(compose)
         compose.up()
