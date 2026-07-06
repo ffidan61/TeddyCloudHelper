@@ -89,7 +89,7 @@ def step_webui(state: AppState) -> None:
             ("On its own port, default 8443 (recommended)", "separate"),
             (
                 "On 443, shared with the box via SNI split "
-                "(advanced — the box then needs its OWN hostname)",
+                "(advanced — routes by TLS server name)",
                 "shared",
             ),
         ],
@@ -100,9 +100,11 @@ def step_webui(state: AppState) -> None:
         ui.warn_panel(
             "Shared 443 routes by TLS server name (SNI): connections using "
             f"{state.webui_hostname!r} go to the WebUI, everything else to "
-            "the box endpoint. A box whose firmware is patched with the "
-            "WebUI hostname CANNOT connect — give the box its own DNS name "
-            "(same IP) and use that when patching the firmware.",
+            "the box endpoint. Tonieboxes send no SNI at all, so this works "
+            "out of the box with no firmware changes — the only way to "
+            "break it is patching the box's firmware to present the exact "
+            f"WebUI hostname {state.webui_hostname!r} as its own SNI. Don't "
+            "do that.",
             title="Shared port 443",
         )
 

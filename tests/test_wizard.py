@@ -63,9 +63,10 @@ def test_step_webui_shared_asks_no_port_but_warns(monkeypatch):
 
     assert state.webui_port_mode == "shared"
     assert state.webui_port == 8443  # untouched
-    # Shared 443 only works when the box has its own hostname — the wizard
-    # must say so (SNI collision cost a full debugging day in prod).
-    assert warnings and "own DNS name" in warnings[0]
+    # The box sends no SNI, so shared-443 works with no firmware changes —
+    # the wizard must still warn about the one way to break it (patching the
+    # box to send the exact WebUI hostname as SNI).
+    assert warnings and "send no SNI" in warnings[0]
 
 
 def test_ask_port_rejects_garbage_until_valid(monkeypatch):

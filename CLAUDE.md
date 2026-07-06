@@ -114,7 +114,13 @@ backup → v0.6 Let's Encrypt for the WebUI hostname → v0.7 health check ("doc
 No PyPI release for now — installation via git URL.
 
 Wizard default for the WebUI is the **separate port** (8443). Shared-443 (SNI split)
-stays available but is marked advanced: it only works when the box firmware is patched
-with its OWN hostname (≠ WebUI hostname) — nginx cannot distinguish box from browser
-otherwise (maintainer decision 2026-07; revisit single-port UX in v2.0.0, e.g. store
-`box_hostname` in state and let the doctor detect SNI collisions).
+stays available and is marked advanced mainly for the failure mode, not because it
+needs extra setup: **the Toniebox sends no SNI at all** (confirmed 2026-07 against a
+real production deployment, corroborated independently by
+[mlohr's public-server writeup](https://mlohr.com/blog/2025/01/teddycloud-on-a-public-server-ip-with-letsencrypt/)),
+so it already falls into the nginx map's `default` branch and reaches TeddyCloud with
+**no firmware hostname patch required** — plain DNS-redirect (or the box's original
+`prod.de.tbs.toys`) is enough. The only way to break this is patching the box's
+firmware to send the *exact* WebUI hostname as SNI — don't do that.
+`box_hostname` (state field + doctor SNI-collision check) exists for the rare case
+where a box *does* present a distinct hostname; leave it empty otherwise.
