@@ -70,6 +70,8 @@ def update_notice(installed: str, repo: str = HELPER_REPO) -> str | None:
     ):
         return None
     return (
-        f"Update available: {latest} (installed v{installed}). "
-        "Reinstall from the git URL to upgrade."
+        f"TeddyCloudHelper update available: {latest} (you have v{installed}). "
+        "Reinstall from the git URL to upgrade. This is about the CLI tool "
+        "itself, not the TeddyCloud server — see the doctor's "
+        "'TeddyCloud image freshness' check for that."
     )

@@ -36,6 +36,9 @@ def test_update_notice_when_newer_available(monkeypatch):
     assert notice is not None
     assert "v0.12.0" in notice
     assert "0.11.1" in notice
+    # Must name the tool explicitly — this notice is about TeddyCloudHelper
+    # itself, not the TeddyCloud server (see doctor's image-freshness check).
+    assert "TeddyCloudHelper" in notice
 
 
 def test_update_notice_none_when_current(monkeypatch):

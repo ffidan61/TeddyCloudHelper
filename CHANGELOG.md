@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.13.1
+
+- Update notice and the doctor's image check now name what they're actually
+  about: "TeddyCloudHelper update available" (the CLI tool) is clearly
+  distinct from "TeddyCloud image freshness" (the server container) — the
+  previous generic wording made the two easy to confuse
+
 ## v0.13.0
 
 - Stream-level access log on port 443: SNI (`$ssl_preread_server_name`) and

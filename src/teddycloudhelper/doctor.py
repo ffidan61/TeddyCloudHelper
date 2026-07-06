@@ -543,7 +543,7 @@ def check_letsencrypt(project_dir: Path, state: AppState, probes: Probes) -> Che
 
 def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
     """Is the running TeddyCloud image the newest one on its channel?"""
-    name = "Image freshness"
+    name = "TeddyCloud image freshness"
     image = f"{TEDDYCLOUD_IMAGE}:{state.teddycloud_image_tag}"
     local = probes.local_image_digest(image)
     if local is None:
