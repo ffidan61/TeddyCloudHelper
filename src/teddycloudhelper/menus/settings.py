@@ -21,7 +21,6 @@ from teddycloudhelper.state import AppState
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Show current configuration", "show"),
     ("Change WebUI hostname", "hostname"),
-    ("Change box hostname (as patched into the firmware)", "box_hostname"),
     ("Change where the WebUI listens (own port / shared 443)", "port_mode"),
     ("Switch deployment mode (direct / nginx)", "mode"),
     ("Security (Basic Auth, client certificates, IP allowlist)", "security"),
@@ -34,7 +33,6 @@ def _show(state: AppState, project: Path) -> None:
         f"Deployment mode:   {state.deployment_mode}",
         f"Image channel:     {state.teddycloud_image_tag}",
         f"WebUI hostname:    {state.webui_hostname or '—'}",
-        f"Box hostname:      {state.box_hostname or '— (original + DNS redirect)'}",
         "WebUI listens on:  "
         + (
             f"port {state.webui_port}"
@@ -93,22 +91,6 @@ def _hostname(state: AppState, project: Path) -> None:
     _apply(state, project)
 
 
-def _box_hostname(state: AppState, project: Path) -> None:
-    """Not rendered into any config — recorded so the doctor can verify DNS
-    and 443 SNI routing for the path the box actually takes."""
-    state.box_hostname = ui.ask_text(
-        "Hostname patched into the box firmware (empty = original "
-        "prod.de.tbs.toys + DNS redirect):",
-        default=state.box_hostname,
-    ).strip()
-    state_mod.save_state(state, project)
-    ui.info_panel(
-        "Box hostname saved — the doctor now checks DNS and SNI routing for it."
-        if state.box_hostname
-        else "Cleared — the doctor checks the original Boxine hostname again."
-    )
-
-
 def _port_mode(state: AppState, project: Path) -> None:
     mode = ui.menu(
         "Where should the WebUI listen?",
@@ -157,7 +139,6 @@ def _mode(state: AppState, project: Path) -> None:
 _HANDLERS = {
     "show": _show,
     "hostname": _hostname,
-    "box_hostname": _box_hostname,
     "port_mode": _port_mode,
     "mode": _mode,
 }

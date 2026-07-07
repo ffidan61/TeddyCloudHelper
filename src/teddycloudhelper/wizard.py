@@ -63,17 +63,6 @@ def step_image_tag(state: AppState) -> None:
     )
 
 
-def step_box_hostname(state: AppState) -> None:
-    """The hostname patched into the box firmware — lets the doctor verify
-    DNS and 443 SNI routing for the path the box actually takes. Empty
-    means the original Boxine hostnames + a DNS redirect."""
-    state.box_hostname = ui.ask_text(
-        "Hostname patched into the box firmware (empty = original "
-        "prod.de.tbs.toys + DNS redirect):",
-        default=state.box_hostname,
-    ).strip()
-
-
 def step_webui(state: AppState) -> None:
     """nginx mode only: hostname + how the WebUI is reached."""
     hostname = ""
@@ -396,7 +385,6 @@ def run() -> None:
 
     step_deployment_mode(state)
     step_image_tag(state)
-    step_box_hostname(state)
     le: str | None = None
     if state.deployment_mode == "nginx":
         step_webui(state)

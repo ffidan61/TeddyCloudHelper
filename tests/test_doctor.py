@@ -260,81 +260,20 @@ def test_webui_unreachable_fails():
 
 
 def test_dns_private_ip_ok():
-    result = doctor.check_box_dns(AppState(), make_probes())
+    result = doctor.check_box_dns(make_probes())
     assert result.status == "ok"
     assert "192.168.1.10" in result.detail
 
 
 def test_dns_public_ip_warns():
-    result = doctor.check_box_dns(
-        AppState(), make_probes(resolve=lambda host: ["104.16.1.1"])
-    )
+    result = doctor.check_box_dns(make_probes(resolve=lambda host: ["104.16.1.1"]))
     assert result.status == "warn"
     assert "Boxine" in result.detail
 
 
 def test_dns_unresolvable_warns():
     probes = make_probes(resolve=_raise(OSError("NXDOMAIN")))
-    assert doctor.check_box_dns(AppState(), probes).status == "warn"
-
-
-def test_dns_custom_box_hostname_checks_that_name():
-    # A patched box dials its own hostname — the Boxine-cloud warning is
-    # noise then; resolving (even to a public IP) is exactly right.
-    seen = []
-
-    def resolve(host):
-        seen.append(host)
-        return ["203.0.113.7"]
-
-    state = AppState(box_hostname="box.example.com")
-    result = doctor.check_box_dns(state, make_probes(resolve=resolve))
-    assert seen == ["box.example.com"]
-    assert result.status == "ok"
-
-
-def test_dns_custom_box_hostname_unresolvable_fails():
-    state = AppState(box_hostname="box.example.com")
-    probes = make_probes(resolve=_raise(OSError("NXDOMAIN")))
-    result = doctor.check_box_dns(state, probes)
-    assert result.status == "fail"
-    assert "DNS record" in result.detail
-
-
-# --- box SNI routing ----------------------------------------------------------
-
-
-def test_box_sni_routing_ok():
-    state = AppState(box_hostname="box.example.com", webui_hostname="tc.example.com")
-    seen = []
-
-    def tls_cert(port, sni):
-        seen.append((port, sni))
-        return make_cert("TeddyCloud Server", "TeddyCloud CA Root Cert.")
-
-    result = doctor.check_box_sni_routing(state, make_probes(tls_cert=tls_cert))
-    assert seen == [(443, "box.example.com")]
-    assert result.status == "ok"
-
-
-def test_box_sni_routing_collision_fails():
-    # The box hostname lands on the WebUI branch of the SNI split.
-    state = AppState(box_hostname="tc.example.com", webui_hostname="tc.example.com")
-    cert = make_cert("tc.example.com", "R11", issuer_org="Let's Encrypt")
-    result = doctor.check_box_sni_routing(
-        state, make_probes(tls_cert=lambda port, sni: cert)
-    )
-    assert result.status == "fail"
-
-
-def test_run_checks_includes_sni_check_only_with_box_hostname(tmp_path):
-    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    names = [r.name for r in doctor.run_checks(tmp_path, AppState(), make_probes())]
-    assert not any(n.startswith("Box SNI") for n in names)
-
-    state = AppState(box_hostname="box.example.com")
-    names = [r.name for r in doctor.run_checks(tmp_path, state, make_probes())]
-    assert "Box SNI box.example.com" in names
+    assert doctor.check_box_dns(probes).status == "warn"
 
 
 # --- WebUI protection -------------------------------------------------------------

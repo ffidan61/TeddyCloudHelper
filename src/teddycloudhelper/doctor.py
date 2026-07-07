@@ -330,26 +330,6 @@ def check_box_tls(state: AppState, probes: Probes) -> CheckResult:
     return _classify_box_path_cert(state, cert, name, "Port 443")
 
 
-def check_box_sni_routing(state: AppState, probes: Probes) -> CheckResult:
-    """When a hostname is patched into the box firmware: probing 443 with
-    exactly that SNI must reach TeddyCloud, not the WebUI (SNI collision)."""
-    name = f"Box SNI {state.box_hostname}"
-    try:
-        cert = probes.tls_cert(443, state.box_hostname)
-    except ssl.SSLError as exc:
-        return CheckResult(
-            name,
-            "warn",
-            f"TLS answered but the handshake did not complete ({exc}) — "
-            "TeddyCloud may simply require the box client certificate.",
-        )
-    except OSError as exc:
-        return CheckResult(name, "fail", f"No TLS on 127.0.0.1:443: {exc}")
-    return _classify_box_path_cert(
-        state, cert, name, f"443 with SNI {state.box_hostname!r}"
-    )
-
-
 def _webui_endpoint(state: AppState) -> tuple[int, str | None]:
     """(host port, SNI) the WebUI should answer on, per mode."""
     if state.deployment_mode == "direct":
@@ -421,34 +401,18 @@ def check_webui(state: AppState, probes: Probes) -> CheckResult:
     return CheckResult(name, "warn", f"{where} answers HTTP {status}.")
 
 
-def check_box_dns(state: AppState, probes: Probes) -> CheckResult:
-    """DNS for the name the box actually dials: the hostname patched into
-    its firmware if known, else the original Boxine name (DNS-redirect
-    setups, where the box's view can differ from this machine's)."""
-    hostname = state.box_hostname or BOX_HOSTNAME
-    name = f"DNS {hostname}"
+def check_box_dns(probes: Probes) -> CheckResult:
+    """DNS for the original Boxine name: DNS-redirect setups mean the box's
+    view of this name can differ from this machine's."""
+    name = f"DNS {BOX_HOSTNAME}"
     try:
-        addresses = probes.resolve(hostname)
+        addresses = probes.resolve(BOX_HOSTNAME)
     except OSError:
-        if state.box_hostname:
-            return CheckResult(
-                name,
-                "fail",
-                f"The box hostname {hostname} does not resolve — the box "
-                "cannot find the server. Create the DNS record.",
-            )
         return CheckResult(
             name,
             "warn",
-            f"{hostname} does not resolve from this machine. Fine if only "
+            f"{BOX_HOSTNAME} does not resolve from this machine. Fine if only "
             "the box's DNS is redirected — but the BOX must resolve it to the "
-            "TeddyCloud host.",
-        )
-    if state.box_hostname:
-        return CheckResult(
-            name,
-            "ok",
-            f"Resolves to {', '.join(addresses)} — make sure that is the "
             "TeddyCloud host.",
         )
     public = [a for a in addresses if ipaddress.ip_address(a).is_global]
@@ -725,13 +689,9 @@ def run_checks(
         check_containers(probes),
         check_ports(state, probes),
         check_box_tls(state, probes),
-    ]
-    if state.box_hostname:
-        results.append(check_box_sni_routing(state, probes))
-    results += [
         check_webui(state, probes),
         check_webui_protection(state),
-        check_box_dns(state, probes),
+        check_box_dns(probes),
         check_ca_identity(project_dir, state),
         check_box_certs(project_dir),
         check_boxes(probes),

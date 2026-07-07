@@ -9,7 +9,6 @@ def test_save_then_load_roundtrip(tmp_path):
     original = state.AppState(
         deployment_mode="nginx",
         webui_port_mode="shared",
-        box_hostname="box.example.com",
         webui_hostname="tc.example.com",
         ip_allowlist=["192.168.0.0/24"],
         next_serial=7,

@@ -122,5 +122,6 @@ so it already falls into the nginx map's `default` branch and reaches TeddyCloud
 **no firmware hostname patch required** — plain DNS-redirect (or the box's original
 `prod.de.tbs.toys`) is enough. The only way to break this is patching the box's
 firmware to send the *exact* WebUI hostname as SNI — don't do that.
-`box_hostname` (state field + doctor SNI-collision check) exists for the rare case
-where a box *does* present a distinct hostname; leave it empty otherwise.
+(A `box_hostname` field + doctor SNI-collision check for the rare
+distinct-firmware-hostname case existed through v0.13 and was removed as unused
+complexity; re-add if it's ever actually needed.)

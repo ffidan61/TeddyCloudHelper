@@ -55,7 +55,6 @@ class AppState:
     teddycloud_image_tag: str = "latest"
     # "shared" (WebUI and box share 443 via SNI split) or "separate" (own port).
     webui_port_mode: str = "separate"
-    box_hostname: str = ""
     webui_hostname: str = ""
     webui_port: int = 8443
     http_port: int = 80

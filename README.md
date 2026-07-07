@@ -16,9 +16,9 @@ reimplemented from scratch in Python.
   mode, security) without re-running the wizard; shows the current
   configuration on entry
 - **Health check ("doctor")** — containers, ports, the certificate the box
-  sees on 443 (incl. SNI-collision detection), WebUI (incl. TeddyCloud's
-  security-mitigation lock), DNS for the box hostname, CA-change guard,
-  box certs, known boxes, Let's Encrypt expiry, image freshness, backup age.
+  sees on 443, WebUI (incl. TeddyCloud's security-mitigation lock), DNS for
+  the box hostname, CA-change guard, box certs, known boxes, Let's Encrypt
+  expiry, image freshness, backup age.
   Also runs headless for cron: `teddycloudhelper --doctor` (exit 1 on failures)
 - **Docker management** — status, start/stop/restart, logs (incl. live
   follow), image channel latest/develop, image updates, project reset;
