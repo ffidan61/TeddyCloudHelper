@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.14.0
+
+- Removed the "hostname patched into the box firmware" feature (wizard
+  prompt, settings menu entry, state field, SNI-collision and custom-DNS
+  doctor checks) — it only mattered for firmware patched to use a custom
+  hostname instead of `prod.de.tbs.toys`, a case nobody actually hits since
+  real Tonieboxes send no SNI at all. The doctor's DNS check now always
+  checks `prod.de.tbs.toys`.
+
 ## v0.13.1
 
 - Update notice and the doctor's image check now name what they're actually
