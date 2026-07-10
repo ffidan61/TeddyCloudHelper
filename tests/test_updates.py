@@ -1,6 +1,17 @@
 """Best-effort update hint from GitHub tags — never breaks startup."""
 
+import importlib.metadata
+
+import teddycloudhelper
 from teddycloudhelper import updates
+
+
+def test_dunder_version_follows_package_metadata():
+    # __version__ was once hardcoded and drifted behind releases, making the
+    # tool nag about "updates" to itself. It must track pyproject.toml.
+    assert teddycloudhelper.__version__ == importlib.metadata.version(
+        "teddycloudhelper"
+    )
 
 
 def fake_tags(monkeypatch, *names):
