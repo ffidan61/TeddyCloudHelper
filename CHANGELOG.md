@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.16.0
+
+- Fixed four "change happens but running containers never see it" bugs,
+  found in a full-project review:
+  - Docker menu "Pull latest images" ran `compose restart`, which keeps the
+    old image — the new image was never used (only `up` recreates changed
+    containers).
+  - After recreating just the teddycloud container (image update), nginx
+    could keep proxying to the old container IP (it resolves the hostname
+    only at startup) — 502 on the WebUI, and in separate-port mode a dead
+    box path — until some later restart.
+  - Backup restore only ran `up`: with an unchanged compose definition, the
+    restored bind-mounted configs (nginx.conf, htpasswd, webui-pki) were
+    never actually applied, and the restored nginx.conf was never validated.
+  - Revoking a client certificate rewrote the CRL but never offered the
+    restart nginx needs to enforce it — the revoked certificate silently
+    kept working.
+- All apply paths (settings, security, docker pull/channel switch, backup
+  restore, certificate revocation) now go through one shared
+  `restart_services()` helper: `nginx -t` validation, then `up`, then
+  `restart`.
+- Doctor: the image-freshness check now also compares the running
+  container's image ID against the local tag and warns "pulled but never
+  applied".
+- Backups now include all compose filename variants (`compose.yaml` etc.),
+  not just `docker-compose.yml` — adopted installs keep their original name.
+
 ## v0.15.2
 
 - Fixed the version the tool reports for itself: `__version__` was a
