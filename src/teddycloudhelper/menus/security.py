@@ -58,19 +58,7 @@ def _apply(state: AppState, project: Path) -> None:
     rendered = wizard.render_project(state, project)
     ui.console.print("Re-rendered: " + ", ".join(str(p) for p in rendered))
     if ui.confirm("Restart services now to apply the change?", default=True):
-        _restart(project)
-
-
-def _restart(project: Path) -> None:
-    # Never restart nginx onto a broken config — it would take the box path
-    # down with it. Rolls back to the last good .bak on failure.
-    wizard.check_nginx_before_restart(project)
-    # up + restart: the configs are bind-mounted, so when the compose
-    # definition itself is unchanged, `up` leaves running containers alone
-    # and nginx would keep serving the old config.
-    compose = docker_cli.Compose(project)
-    compose.up()
-    compose.restart()
+        wizard.restart_services(project)
 
 
 def _toggle_auth(state: AppState, project: Path) -> None:
@@ -152,7 +140,7 @@ def _set_user(state: AppState, project: Path) -> None:
     if state.basic_auth_enabled:
         ui.info_panel("htpasswd changed — nginx picks it up on the next restart.")
         if ui.confirm("Restart services now?", default=True):
-            _restart(project)
+            wizard.restart_services(project)
 
 
 def _remove_user(state: AppState, project: Path) -> None:

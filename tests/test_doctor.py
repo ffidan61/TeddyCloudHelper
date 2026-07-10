@@ -379,6 +379,26 @@ def test_image_freshness_checks_the_configured_channel():
     assert seen == [f"{doctor.TEDDYCLOUD_IMAGE}:develop"]
 
 
+def test_image_freshness_pulled_but_not_applied_warns():
+    # `docker compose restart` after a pull keeps the old image running —
+    # the container's image ID then differs from what the local tag points at.
+    probes = make_probes(
+        running_image_id=lambda: "sha256:old",
+        local_image_id=lambda image: "sha256:new",
+    )
+    result = doctor.check_image_freshness(AppState(), probes)
+    assert result.status == "warn"
+    assert "still runs the old one" in result.detail
+
+
+def test_image_freshness_running_matches_local_is_ok():
+    probes = make_probes(
+        running_image_id=lambda: "sha256:same",
+        local_image_id=lambda image: "sha256:same",
+    )
+    assert doctor.check_image_freshness(AppState(), probes).status == "ok"
+
+
 def test_image_freshness_degrades_without_data():
     no_local = make_probes(local_image_digest=lambda image: None)
     assert doctor.check_image_freshness(AppState(), no_local).status == "warn"

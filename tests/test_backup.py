@@ -99,6 +99,14 @@ def test_restore_rejects_unknown_top_level(tmp_path):
     assert not (tmp_path / "content").exists()
 
 
+def test_backup_covers_adopted_compose_filenames(tmp_path):
+    # Adopted installs keep their original compose filename (compose.yaml
+    # etc.) — it must be backed up and restorable like docker-compose.yml.
+    (tmp_path / "compose.yaml").write_text("services: {}")
+    archive = backup.create_backup(tmp_path)
+    assert backup.archive_members(archive) == ["compose.yaml"]
+
+
 def test_restore_missing_archive(tmp_path):
     with pytest.raises(backup.BackupError, match="not found"):
         backup.restore_backup(tmp_path, tmp_path / "nope.tar.gz")

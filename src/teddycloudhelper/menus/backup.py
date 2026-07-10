@@ -12,7 +12,7 @@ from pathlib import Path
 
 from rich.table import Table
 
-from teddycloudhelper import backup, docker_cli, ui
+from teddycloudhelper import backup, docker_cli, ui, wizard
 from teddycloudhelper.backup import BackupError
 from teddycloudhelper.menus import project as project_menu
 
@@ -83,7 +83,9 @@ def _restore(project: Path) -> None:
         title="Backup restored",
     )
     if ui.confirm("Restart services now to run with the restored config?", default=True):
-        docker_cli.Compose(project).up()
+        # Restored configs are bind-mounted — a plain `up` would leave running
+        # containers on the old files; this also `nginx -t`s the restored conf.
+        wizard.restart_services(project)
 
 
 def run() -> None:

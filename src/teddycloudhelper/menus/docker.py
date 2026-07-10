@@ -61,7 +61,10 @@ def _dispatch(action: str, compose: docker_cli.Compose) -> Path | None:
         compose.pull()
         ui.info_panel("Images pulled.")
         if ui.confirm("Restart services now to use the new images?", default=True):
-            compose.restart()
+            # NOT compose.restart() alone: `restart` keeps the old image;
+            # only `up` recreates containers whose image changed (and the
+            # follow-up restart lets nginx re-resolve the new container IP).
+            wizard.restart_services(compose.project_dir)
             _print_status(compose)
     elif action == "image":
         _switch_image(compose)
@@ -127,7 +130,7 @@ def _switch_image(compose: docker_cli.Compose) -> None:
     ui.info_panel(f"Compose file now uses the {tag!r} image.")
     if ui.confirm("Pull the image and restart now?", default=True):
         compose.pull()
-        compose.up()
+        wizard.restart_services(project)
         _print_status(compose)
 
 

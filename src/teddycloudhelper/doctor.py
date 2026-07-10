@@ -99,6 +99,11 @@ class Probes:
     # informational — the digest comparison above is the source of truth.
     local_image_version: Callable[[str], str | None] = lambda image: None
     latest_teddycloud_release: Callable[[], str | None] = lambda: None
+    # Image IDs to detect "pulled but never applied": what the running
+    # teddycloud container was created from vs. what the local tag points at
+    # now. None if undeterminable — the comparison is then skipped.
+    running_image_id: Callable[[], str | None] = lambda: None
+    local_image_id: Callable[[str], str | None] = lambda image: None
 
 
 # --- default (real) probe implementations ------------------------------------
@@ -199,6 +204,21 @@ def _remote_image_digest(image: str) -> str | None:
         return None
 
 
+def _local_image_id(image: str) -> str | None:
+    """The image ID the local tag currently points at (None if unknown)."""
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def _local_image_version(image: str) -> str | None:
     """The running image's ``org.opencontainers.image.version`` label."""
     try:
@@ -242,15 +262,18 @@ def default_probes(project_dir: Path) -> Probes:
             "teddycloud", "curl", "-s", "http://localhost:80/api/getBoxes"
         ).stdout
 
-    def teddycloud_mounts() -> dict[str, str]:
+    def container_name() -> str:
         # Resolve the container name via compose ps — adopted installs may
         # not use the template's fixed container_name.
         names = [svc.name for svc in compose.ps() if svc.service == "teddycloud"]
         if not names or not names[0]:
             raise docker_cli.DockerError("no teddycloud container exists yet")
+        return names[0]
+
+    def container_inspect(fmt: str) -> str:
         try:
             result = subprocess.run(
-                ["docker", "container", "inspect", "--format", "{{json .Mounts}}", names[0]],
+                ["docker", "container", "inspect", "--format", fmt, container_name()],
                 capture_output=True,
                 text=True,
             )
@@ -260,11 +283,20 @@ def default_probes(project_dir: Path) -> Probes:
             raise docker_cli.DockerError(
                 result.stderr.strip() or "docker container inspect failed"
             )
+        return result.stdout.strip()
+
+    def teddycloud_mounts() -> dict[str, str]:
         try:
-            mounts = json.loads(result.stdout)
+            mounts = json.loads(container_inspect("{{json .Mounts}}"))
         except json.JSONDecodeError as exc:
             raise docker_cli.DockerError(f"Unparseable inspect output: {exc}") from exc
         return {m["Destination"]: m.get("Source", "") for m in mounts}
+
+    def running_image_id() -> str | None:
+        try:
+            return container_inspect("{{.Image}}") or None
+        except docker_cli.DockerError:
+            return None
 
     return Probes(
         ps=compose.ps,
@@ -278,6 +310,8 @@ def default_probes(project_dir: Path) -> Probes:
         teddycloud_mounts=teddycloud_mounts,
         local_image_version=_local_image_version,
         latest_teddycloud_release=_latest_teddycloud_release,
+        running_image_id=running_image_id,
+        local_image_id=_local_image_id,
     )
 
 
@@ -599,6 +633,19 @@ def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
     if local is None:
         return CheckResult(
             name, "warn", f"No local digest for {image} — image never pulled?"
+        )
+    # "Pulled but never applied": the running container was created from an
+    # older image than what the local tag points at now. A plain `docker
+    # compose restart` causes exactly this — it keeps the old image.
+    running_id = probes.running_image_id()
+    local_id = probes.local_image_id(image)
+    if running_id and local_id and running_id != local_id:
+        return CheckResult(
+            name,
+            "warn",
+            f"A newer {state.teddycloud_image_tag!r} image was pulled, but "
+            "the teddycloud container still runs the old one — restart via "
+            "'Pull latest images' in the Docker menu to apply it.",
         )
     remote = probes.remote_image_digest(image)
     if remote is None:

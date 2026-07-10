@@ -372,6 +372,25 @@ def check_nginx_before_restart(project_dir: Path) -> None:
     )
 
 
+def restart_services(
+    project_dir: Path, runner: docker_cli.Runner | None = None
+) -> None:
+    """The one true way to apply config changes to running services.
+
+    ``nginx -t`` validation first (never restart onto a broken config), then
+    ``up`` (recreates containers whose image or definition changed), then
+    ``restart`` — required because the configs are bind-mounted (``up`` alone
+    leaves unchanged containers serving the old files) and because nginx
+    resolves ``teddycloud`` only at startup (a recreated teddycloud container
+    can get a new IP, and a plain ``up`` would leave nginx proxying to the
+    old one).
+    """
+    check_nginx_before_restart(project_dir)
+    compose = docker_cli.Compose(project_dir, runner=runner)
+    compose.up()
+    compose.restart()
+
+
 def run() -> None:
     project_dir = step_project_dir()
     if state_mod.has_state(project_dir):

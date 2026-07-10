@@ -474,6 +474,44 @@ def test_check_nginx_unavailable_docker_is_noop(tmp_path, monkeypatch):
     wizard.check_nginx_before_restart(tmp_path)  # no raise, restart proceeds
 
 
+def test_restart_services_validates_then_up_then_restart(tmp_path, monkeypatch):
+    # The one shared apply path: nginx -t first, then `up` (applies new
+    # images / changed definitions), then `restart` (bind-mounted configs +
+    # nginx's cached DNS of the teddycloud container).
+    _write_nginx_conf(tmp_path)
+    validated = []
+    monkeypatch.setattr(
+        docker_cli,
+        "nginx_config_test",
+        lambda p: validated.append(p) or subprocess.CompletedProcess([], 0),
+    )
+    calls = []
+
+    def runner(args, cwd):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    wizard.restart_services(tmp_path, runner=runner)
+
+    assert validated == [tmp_path]
+    assert [c[2] for c in calls] == ["up", "restart"]
+
+
+def test_restart_services_broken_nginx_conf_never_touches_docker(tmp_path, monkeypatch):
+    _write_nginx_conf(tmp_path, "BROKEN\n")
+    monkeypatch.setattr(
+        docker_cli,
+        "nginx_config_test",
+        lambda p: subprocess.CompletedProcess([], 1, stderr="nginx: configuration test failed"),
+    )
+
+    def runner(args, cwd):
+        raise AssertionError("docker compose must not run on a broken config")
+
+    with pytest.raises(docker_cli.DockerError):
+        wizard.restart_services(tmp_path, runner=runner)
+
+
 def test_check_nginx_infra_error_warns_but_proceeds(tmp_path, monkeypatch):
     # docker run failed for a non-config reason -> don't block the restart.
     _write_nginx_conf(tmp_path)

@@ -99,11 +99,17 @@ def _revoke(project: Path) -> None:
     if not ui.confirm(f"Revoke serial {serial}? This cannot be undone.", default=False):
         return
     path = crl.revoke_serial(project, serial)
-    ui.info_panel(
-        f"Serial {serial} revoked; CRL rewritten: {path}\n"
-        "Restart/reload nginx so it picks up the new CRL.",
-        title="Certificate revoked",
-    )
+    ui.info_panel(f"Serial {serial} revoked; CRL rewritten: {path}", title="Certificate revoked")
+    # nginx loads ssl_crl at config time — until a restart, the revoked
+    # certificate KEEPS WORKING. Don't leave that to a manual step.
+    if ui.confirm("Restart services now so nginx enforces the revocation?", default=True):
+        wizard.restart_services(project)
+    else:
+        ui.warn_panel(
+            "The revoked certificate stays usable until the services are "
+            "restarted (nginx only reads the CRL at startup).",
+            title="Revocation not active yet",
+        )
 
 
 def _server_cert(project: Path) -> None:

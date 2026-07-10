@@ -17,10 +17,15 @@ import tarfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-# Top-level items included in (and accepted back from) a backup.
+# Top-level items included in (and accepted back from) a backup. All compose
+# filename variants are listed because adopted installs (docker menu) keep
+# whatever name they already had, not just the one the wizard renders.
 BACKUP_ITEMS = (
     "teddycloudhelper.json",
+    "compose.yaml",
+    "compose.yml",
     "docker-compose.yml",
+    "docker-compose.yaml",
     "config",
     "certs",
     "firmware",

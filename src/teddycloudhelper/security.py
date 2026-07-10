@@ -75,6 +75,10 @@ def _other_lines(path: Path, username: str) -> list[str]:
 
 def _write(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # NOTE: must stay world-readable (0644 default) — the nginx *worker*
+    # (uid 101 in the container) reads this file per request through the ro
+    # bind mount, and it is neither the owner nor in the owner's group.
+    # bcrypt hashes are the protection here, not file permissions.
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n")
 
 
