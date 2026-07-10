@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.15.2
+
+- Fixed the version the tool reports for itself: `__version__` was a
+  hardcoded string that release bumps forgot (stuck at 0.14.0), so an
+  up-to-date install kept nagging about an "update" to itself. It is now
+  derived from the installed package metadata — `pyproject.toml` is the
+  single version source — and a test pins the two together.
+
+## v0.15.1
+
+- Fixed the "TeddyCloudHelper update available" notice at startup: it
+  queried the GitHub tags API anonymously, which answers 404 since the
+  repo went private — the check had been silently dead since then. It now
+  falls back to `git ls-remote --tags` over the same SSH URL the tool is
+  installed from (batch mode + timeouts, so startup can never hang on an
+  ssh prompt); the API stays the first choice and takes over again once
+  the repo goes public.
+- The notice now names the actual upgrade command
+  (`uv tool upgrade teddycloudhelper`) instead of the vague
+  "reinstall from the git URL".
+
+## v0.15.0
+
+- Fixed WebUI custom-tonie image uploads: TeddyCloud serves these images
+  from `www/custom_img` but its Image Manager uploads them into
+  `library/custom_img` — uploads 500'd (directory missing) and, once it
+  existed, images never showed up. The compose template now binds the same
+  host `./custom_img` directory to both container paths, so uploads and
+  serving share one directory.
+- New doctor check "Container mounts": inspects the running teddycloud
+  container live and fails when a mount expected by the current template
+  is missing (stale or hand-edited compose) or when the two custom_img
+  paths come from different host directories. A test pins the template's
+  mounts to the doctor's expectation so neither can drift silently.
+- New Project-settings action "Re-render config files (after a
+  TeddyCloudHelper update)": regenerates compose + nginx configs from the
+  current templates without changing any setting — the fix path the new
+  doctor check points to.
+
 ## v0.14.0
 
 - Removed the "hostname patched into the box firmware" feature (wizard
