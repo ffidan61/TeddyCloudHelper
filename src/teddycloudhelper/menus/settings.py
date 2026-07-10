@@ -24,6 +24,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Change where the WebUI listens (own port / shared 443)", "port_mode"),
     ("Switch deployment mode (direct / nginx)", "mode"),
     ("Security (Basic Auth, client certificates, IP allowlist)", "security"),
+    ("Re-render config files (after a TeddyCloudHelper update)", "rerender"),
     ("Back to main menu", "back"),
 ]
 
@@ -136,11 +137,22 @@ def _mode(state: AppState, project: Path) -> None:
     _apply(state, project)
 
 
+def _rerender(state: AppState, project: Path) -> None:
+    """Regenerate compose + nginx configs from the current templates.
+
+    The escape hatch when a TeddyCloudHelper update changed a template (a
+    new mount, an nginx directive): existing deployments keep their old
+    rendered files until this runs. The doctor's mount check points here.
+    """
+    _apply(state, project)
+
+
 _HANDLERS = {
     "show": _show,
     "hostname": _hostname,
     "port_mode": _port_mode,
     "mode": _mode,
+    "rerender": _rerender,
 }
 
 

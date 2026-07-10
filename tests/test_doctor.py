@@ -25,8 +25,18 @@ def make_probes(**overrides) -> doctor.Probes:
         getboxes=lambda: '{"boxes":[{"ID":"1","commonName":"001122334455","boxName":"Kids"}]}',
         local_image_digest=lambda image: "sha256:abc",
         remote_image_digest=lambda image: "sha256:abc",
+        teddycloud_mounts=lambda: healthy_mounts(),
     )
     return doctor.Probes(**(defaults | overrides))
+
+
+def healthy_mounts() -> dict[str, str]:
+    """Every expected mount present; both custom_img paths share one source."""
+    mounts = {dest: f"/host{dest}" for dest in doctor.TEDDYCLOUD_MOUNTS}
+    mounts["/teddycloud/data/library/custom_img"] = mounts[
+        "/teddycloud/data/www/custom_img"
+    ]
+    return mounts
 
 
 def make_cert(
@@ -109,6 +119,49 @@ def test_containers_starting_warns():
     result = doctor.check_containers(probes)
     assert result.status == "warn"
     assert "starting" in result.detail.lower()
+
+
+# --- container mounts ------------------------------------------------------------
+
+
+def test_mounts_all_present():
+    result = doctor.check_mounts(make_probes())
+    assert result.status == "ok"
+
+
+def test_mounts_missing_mount_fails_with_rerender_hint():
+    # The exact prod incident: compose rendered before the template gained
+    # the library/custom_img mount — WebUI image uploads 500'd.
+    stale = healthy_mounts()
+    del stale["/teddycloud/data/library/custom_img"]
+    result = doctor.check_mounts(make_probes(teddycloud_mounts=lambda: stale))
+    assert result.status == "fail"
+    assert "/teddycloud/data/library/custom_img" in result.detail
+    assert "Re-render" in result.detail
+
+
+def test_mounts_diverging_custom_img_sources_fail():
+    # Both paths mounted, but from different host dirs: uploads land outside
+    # the served directory and never show up in the WebUI.
+    split = healthy_mounts()
+    split["/teddycloud/data/library/custom_img"] = "/host/elsewhere"
+    result = doctor.check_mounts(make_probes(teddycloud_mounts=lambda: split))
+    assert result.status == "fail"
+    assert "custom_img" in result.detail
+
+
+def test_mounts_extra_mounts_are_fine():
+    extra = healthy_mounts() | {"/teddycloud/data/www/extra": "/host/extra"}
+    assert doctor.check_mounts(make_probes(teddycloud_mounts=lambda: extra)).status == "ok"
+
+
+def test_mounts_docker_error_warns():
+    probes = make_probes(
+        teddycloud_mounts=_raise(docker_cli.DockerError("no teddycloud container"))
+    )
+    result = doctor.check_mounts(probes)
+    assert result.status == "warn"
+    assert "no teddycloud container" in result.detail
 
 
 # --- ports ---------------------------------------------------------------------

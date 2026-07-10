@@ -1,6 +1,8 @@
 """Renderer + template contents for all mode combinations."""
 
-from teddycloudhelper import render
+import re
+
+from teddycloudhelper import doctor, render
 
 DIRECT = {
     "deployment_mode": "direct",
@@ -81,6 +83,15 @@ def test_compose_mounts_all_upstream_data_dirs():
     # custom_img is bound to both the serving dir (www) and the WebUI Image
     # Manager's upload target (library/custom_img) so uploads show up served.
     assert "- ./custom_img:/teddycloud/data/library/custom_img" in text
+
+
+def test_compose_teddycloud_mounts_match_doctor_expectations():
+    # The doctor's mount check (doctor.TEDDYCLOUD_MOUNTS) and the template
+    # must agree exactly — a mount added to one but not the other either
+    # goes unmonitored or triggers false alarms on healthy deployments.
+    text = render.render_template("docker-compose.yml.j2", DIRECT)
+    rendered = re.findall(r"^\s+- \./[^:]+:(/teddycloud/\S+)$", text, re.MULTILINE)
+    assert sorted(rendered) == sorted(doctor.TEDDYCLOUD_MOUNTS)
 
 
 def test_compose_direct_publishes_teddycloud_ports():

@@ -1,8 +1,8 @@
 """Health checks ("doctor"): verify a deployment end to end.
 
-Each check inspects one aspect — containers, published ports, the TLS
-certificate the box sees on 443, the WebUI, DNS redirection, box certs,
-Let's Encrypt — and returns a :class:`CheckResult` (ok / warn / fail with a
+Each check inspects one aspect — containers, container mounts, published
+ports, the TLS certificate the box sees on 443, the WebUI, DNS redirection,
+box certs, Let's Encrypt — and returns a :class:`CheckResult` (ok / warn / fail with a
 human-readable detail). All network and docker access goes through the
 :class:`Probes` seam so tests never need Docker or open sockets.
 
@@ -46,6 +46,24 @@ BACKUP_WARN_DAYS = 30
 
 TEDDYCLOUD_IMAGE = "ghcr.io/toniebox-reverse-engineering/teddycloud"
 
+# Container paths the compose template mounts into the teddycloud service.
+# A stale or hand-edited compose that misses one keeps running happily but
+# breaks silently later: data written into the container layer is lost on
+# the next image update, and a missing library/custom_img made the WebUI
+# image upload 500. test_render.py asserts the template matches this tuple,
+# so neither side can drift without a red test.
+TEDDYCLOUD_MOUNTS = (
+    "/teddycloud/certs",
+    "/teddycloud/config",
+    "/teddycloud/data/content",
+    "/teddycloud/data/library",
+    "/teddycloud/data/www/custom_img",
+    "/teddycloud/data/library/custom_img",
+    "/teddycloud/data/firmware",
+    "/teddycloud/data/cache",
+    "/teddycloud/data/www/plugins",
+)
+
 _PROBE_TIMEOUT = 5.0
 
 
@@ -73,6 +91,9 @@ class Probes:
     # undeterminable — docker missing, registry unreachable, never pulled).
     local_image_digest: Callable[[str], str | None]
     remote_image_digest: Callable[[str], str | None]
+    # Live mounts of the teddycloud container: destination -> host source.
+    # Raises DockerError when the container does not exist (yet).
+    teddycloud_mounts: Callable[[], dict[str, str]]
     # Human-readable version: the running image's OCI version label and the
     # newest TeddyCloud GitHub release (None if undeterminable). Purely
     # informational — the digest comparison above is the source of truth.
@@ -221,6 +242,30 @@ def default_probes(project_dir: Path) -> Probes:
             "teddycloud", "curl", "-s", "http://localhost:80/api/getBoxes"
         ).stdout
 
+    def teddycloud_mounts() -> dict[str, str]:
+        # Resolve the container name via compose ps — adopted installs may
+        # not use the template's fixed container_name.
+        names = [svc.name for svc in compose.ps() if svc.service == "teddycloud"]
+        if not names or not names[0]:
+            raise docker_cli.DockerError("no teddycloud container exists yet")
+        try:
+            result = subprocess.run(
+                ["docker", "container", "inspect", "--format", "{{json .Mounts}}", names[0]],
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise docker_cli.DockerError(f"Could not run 'docker': {exc}") from exc
+        if result.returncode != 0:
+            raise docker_cli.DockerError(
+                result.stderr.strip() or "docker container inspect failed"
+            )
+        try:
+            mounts = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise docker_cli.DockerError(f"Unparseable inspect output: {exc}") from exc
+        return {m["Destination"]: m.get("Source", "") for m in mounts}
+
     return Probes(
         ps=compose.ps,
         listening=_listening,
@@ -230,6 +275,7 @@ def default_probes(project_dir: Path) -> Probes:
         getboxes=getboxes,
         local_image_digest=_local_image_digest,
         remote_image_digest=_remote_image_digest,
+        teddycloud_mounts=teddycloud_mounts,
         local_image_version=_local_image_version,
         latest_teddycloud_release=_latest_teddycloud_release,
     )
@@ -275,6 +321,46 @@ def check_containers(probes: Probes) -> CheckResult:
             "first-start certificate generation can take minutes.",
         )
     return CheckResult("Containers", "ok", f"All {len(services)} container(s) running.")
+
+
+def check_mounts(probes: Probes) -> CheckResult:
+    """The running container's mounts vs. what the current template expects.
+
+    Catches stale deployments: a compose rendered before the template gained
+    a mount keeps running fine until the feature needing it breaks — e.g. the
+    WebUI image upload 500ing because library/custom_img was never mounted.
+    """
+    name = "Container mounts"
+    try:
+        mounts = probes.teddycloud_mounts()
+    except docker_cli.DockerError as exc:
+        return CheckResult(
+            name, "warn", f"Could not inspect the teddycloud container: {exc}"
+        )
+    missing = [dest for dest in TEDDYCLOUD_MOUNTS if dest not in mounts]
+    if missing:
+        return CheckResult(
+            name,
+            "fail",
+            f"Missing mount(s): {', '.join(missing)} — the compose file "
+            "predates the current template (or was hand-edited). Use "
+            "'Re-render config files' under Project settings, then restart.",
+        )
+    if (
+        mounts["/teddycloud/data/www/custom_img"]
+        != mounts["/teddycloud/data/library/custom_img"]
+    ):
+        return CheckResult(
+            name,
+            "fail",
+            "www/custom_img and library/custom_img are mounted from different "
+            "host directories — WebUI image uploads land outside the served "
+            "directory and never show up. Use 'Re-render config files' under "
+            "Project settings, then restart.",
+        )
+    return CheckResult(
+        name, "ok", f"All {len(TEDDYCLOUD_MOUNTS)} expected mounts are present."
+    )
 
 
 def check_ports(state: AppState, probes: Probes) -> CheckResult:
@@ -687,6 +773,7 @@ def run_checks(
     results = [
         check_files(project_dir, state),
         check_containers(probes),
+        check_mounts(probes),
         check_ports(state, probes),
         check_box_tls(state, probes),
         check_webui(state, probes),

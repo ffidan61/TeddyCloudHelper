@@ -96,6 +96,24 @@ def test_mode_switch_to_direct(tmp_path, monkeypatch, quiet):
     assert (tmp_path / "docker-compose.yml").is_file()
 
 
+def test_rerender_regenerates_configs_without_changing_state(
+    tmp_path, monkeypatch, quiet
+):
+    # The escape hatch after a TeddyCloudHelper update: stale rendered files
+    # (e.g. missing a newly added mount) get regenerated as-is.
+    state = AppState(deployment_mode="direct")
+    (tmp_path / "docker-compose.yml").write_text("stale, pre-update compose")
+    before = state.__dict__.copy()
+    no_restart(monkeypatch)
+
+    settings._rerender(state, tmp_path)
+
+    assert state.__dict__ == before
+    text = (tmp_path / "docker-compose.yml").read_text()
+    assert "library/custom_img" in text  # current template, not the stale file
+    assert list(tmp_path.glob("docker-compose.yml.*.bak"))  # old file backed up
+
+
 def test_port_mode_switch_to_separate_asks_port(tmp_path, monkeypatch, quiet):
     state = AppState(
         deployment_mode="nginx",
