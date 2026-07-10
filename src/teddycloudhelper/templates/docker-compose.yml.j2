@@ -19,6 +19,11 @@ services:
       - ./content:/teddycloud/data/content
       - ./library:/teddycloud/data/library
       - ./custom_img:/teddycloud/data/www/custom_img
+      # TeddyCloud serves custom-tonie images from www/custom_img (pic = "/custom_img/..."),
+      # but its WebUI Image Manager uploads them via special=library into library/custom_img
+      # and 500s if that dir is missing. Bind the same host dir to both paths so uploads and
+      # serving share one directory — no matter which path the WebUI picks.
+      - ./custom_img:/teddycloud/data/library/custom_img
       - ./firmware:/teddycloud/data/firmware
       - ./cache:/teddycloud/data/cache
       - ./plugins:/teddycloud/data/www/plugins

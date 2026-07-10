@@ -78,6 +78,9 @@ def test_compose_mounts_all_upstream_data_dirs():
         assert mount in text
     assert ":/teddycloud/content" not in text
     assert ":/teddycloud/library" not in text
+    # custom_img is bound to both the serving dir (www) and the WebUI Image
+    # Manager's upload target (library/custom_img) so uploads show up served.
+    assert "- ./custom_img:/teddycloud/data/library/custom_img" in text
 
 
 def test_compose_direct_publishes_teddycloud_ports():
