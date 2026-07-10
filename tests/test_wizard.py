@@ -474,6 +474,19 @@ def test_check_nginx_unavailable_docker_is_noop(tmp_path, monkeypatch):
     wizard.check_nginx_before_restart(tmp_path)  # no raise, restart proceeds
 
 
+def test_check_nginx_skipped_in_direct_mode_despite_leftover_conf(tmp_path, monkeypatch):
+    # Mode switches don't delete nginx/nginx.conf — a broken leftover must
+    # never block a direct-mode restart (no container uses the file).
+    _write_nginx_conf(tmp_path, "BROKEN\n")
+    state_mod.save_state(AppState(deployment_mode="direct"), tmp_path)
+
+    def boom(*a, **kw):
+        raise AssertionError("must not validate a leftover conf in direct mode")
+
+    monkeypatch.setattr(docker_cli, "nginx_config_test", boom)
+    wizard.check_nginx_before_restart(tmp_path)  # no raise
+
+
 def test_restart_services_validates_then_up_then_restart(tmp_path, monkeypatch):
     # The one shared apply path: nginx -t first, then `up` (applies new
     # images / changed definitions), then `restart` (bind-mounted configs +

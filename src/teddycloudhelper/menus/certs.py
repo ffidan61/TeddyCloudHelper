@@ -50,9 +50,11 @@ def _create_ca(project: Path) -> None:
 def _issue(project: Path) -> None:
     name = ui.ask_text("Name for this certificate (e.g. the user or device):")
     existing = {info.name: info for info in client_certs.list_client_certs(project)}
-    if name in existing and not ui.confirm(
-        f"{name!r} already exists (serial {existing[name].serial}). Reissue and "
-        "overwrite the files? The old certificate stays valid until you revoke it.",
+    old = existing.get(name)
+    if old is not None and not ui.confirm(
+        f"{name!r} already exists (serial {old.serial}). Reissue and overwrite "
+        "the files? The OLD certificate is revoked in the same step — once its "
+        "files are overwritten it could never be revoked later.",
         default=False,
     ):
         return
@@ -61,12 +63,29 @@ def _issue(project: Path) -> None:
     info = client_certs.issue_client_cert(project, name, state.next_serial, password)
     state.next_serial += 1
     state_mod.save_state(state, project)
+    detail = ""
+    if old is not None and old.serial != info.serial:
+        # The old cert's files are gone now, so its serial would otherwise be
+        # unrevokable — but nginx would keep accepting it (CA-signed, not
+        # expired, not on the CRL).
+        crl.revoke_serial(project, old.serial)
+        detail = f"\nThe previous certificate (serial {old.serial}) was revoked."
     ui.info_panel(
         f"Issued {info.name} (serial {info.serial}), "
-        f"valid until {info.not_valid_after:%Y-%m-%d}.\n\n"
+        f"valid until {info.not_valid_after:%Y-%m-%d}.{detail}\n\n"
         f"Import this file into the browser: {info.p12_path}",
         title="Client certificate issued",
     )
+    if (
+        old is not None
+        and old.serial != info.serial
+        and ui.confirm(
+            "Restart services now so nginx enforces the revocation of the "
+            "old certificate?",
+            default=True,
+        )
+    ):
+        wizard.restart_services(project)
 
 
 def _list(project: Path) -> None:

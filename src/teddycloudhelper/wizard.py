@@ -349,6 +349,14 @@ def check_nginx_before_restart(project_dir: Path) -> None:
     conf = project_dir / NGINX_CONF_RELPATH
     if not conf.is_file():
         return
+    try:
+        if state_mod.load_state(project_dir).deployment_mode != "nginx":
+            # Leftover nginx.conf from an earlier nginx-mode render (mode
+            # switches don't delete it) — no container uses it, so a broken
+            # one must never block a direct-mode restart.
+            return
+    except state_mod.StateError:
+        pass  # no/unreadable state: validate anyway (safety net, not a gate)
     result = docker_cli.nginx_config_test(project_dir)
     if result is None or result.returncode == 0:
         return
