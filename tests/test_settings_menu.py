@@ -96,6 +96,28 @@ def test_mode_switch_to_direct(tmp_path, monkeypatch, quiet):
     assert (tmp_path / "docker-compose.yml").is_file()
 
 
+def test_image_channel_switch_renders_new_tag(tmp_path, monkeypatch, quiet):
+    # Moved here from the Docker menu in v0.16.1 — it is a config change
+    # (state + re-render), so it belongs with the other project settings.
+    state = AppState(deployment_mode="direct", teddycloud_image_tag="latest")
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "develop")
+    no_restart(monkeypatch)  # decline "pull and restart"
+
+    settings._image_channel(state, tmp_path)
+
+    assert state.teddycloud_image_tag == "develop"
+    assert ":develop" in (tmp_path / "docker-compose.yml").read_text()
+
+
+def test_image_channel_same_tag_is_a_noop(tmp_path, monkeypatch, quiet):
+    state = AppState(teddycloud_image_tag="latest")
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "latest")
+
+    settings._image_channel(state, tmp_path)
+
+    assert not (tmp_path / "docker-compose.yml").exists()
+
+
 def test_rerender_regenerates_configs_without_changing_state(
     tmp_path, monkeypatch, quiet
 ):

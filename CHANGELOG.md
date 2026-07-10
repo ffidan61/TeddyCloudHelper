@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.16.1
+
+- Moved "Switch TeddyCloud image channel (latest / develop)" from the Docker
+  menu into Project settings — it is a configuration change (state +
+  re-render + restart cycle) like everything else there, not a container
+  operation. Behaviour is unchanged, including the foreign-compose warning
+  and the pull-and-restart offer.
+
 ## v0.16.0
 
 - Fixed four "change happens but running containers never see it" bugs,
