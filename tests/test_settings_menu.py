@@ -96,6 +96,26 @@ def test_mode_switch_to_direct(tmp_path, monkeypatch, quiet):
     assert (tmp_path / "docker-compose.yml").is_file()
 
 
+def test_mode_switch_to_direct_resets_letsencrypt(tmp_path, monkeypatch, quiet):
+    # Direct mode removes nginx AND certbot: the LE cert can never renew, so
+    # a stale "letsencrypt" TLS mode would warn about the inevitable expiry
+    # at every start and in every doctor run — forever.
+    state = AppState(
+        deployment_mode="nginx",
+        webui_hostname="tc.example.com",
+        webui_tls_mode="letsencrypt",
+        letsencrypt_enabled=True,
+    )
+    answers = iter([True, False])  # confirm switch, decline restart
+    monkeypatch.setattr(ui, "confirm", lambda *a, **kw: next(answers))
+
+    settings._mode(state, tmp_path)
+
+    saved = settings.state_mod.load_state(tmp_path)
+    assert saved.webui_tls_mode == "selfsigned"
+    assert saved.letsencrypt_enabled is False
+
+
 def test_image_channel_switch_renders_new_tag(tmp_path, monkeypatch, quiet):
     # Moved here from the Docker menu in v0.16.1 — it is a config change
     # (state + re-render), so it belongs with the other project settings.

@@ -69,6 +69,38 @@ def test_step_webui_shared_asks_no_port_but_warns(monkeypatch):
     assert warnings and "send no SNI" in warnings[0]
 
 
+def test_disable_letsencrypt_without_nginx_resets_le_state():
+    # Direct mode removes certbot — the cert can never renew, so leaving LE
+    # active would page about the inevitable expiry at every start, forever.
+    state = AppState(
+        deployment_mode="direct",
+        webui_tls_mode="letsencrypt",
+        letsencrypt_enabled=True,
+    )
+    assert wizard.disable_letsencrypt_without_nginx(state) is True
+    assert state.webui_tls_mode == "selfsigned"
+    assert state.letsencrypt_enabled is False
+
+
+def test_disable_letsencrypt_keeps_nginx_mode_untouched():
+    state = AppState(
+        deployment_mode="nginx",
+        webui_tls_mode="letsencrypt",
+        letsencrypt_enabled=True,
+    )
+    assert wizard.disable_letsencrypt_without_nginx(state) is False
+    assert state.webui_tls_mode == "letsencrypt"
+
+
+def test_ask_port_rejects_the_deployments_own_ports(monkeypatch):
+    # 80/443 are always published (box HTTP/ACME + box TLS) — accepting them
+    # renders a compose file that publishes the port twice and fails to start.
+    answers = iter(["443", "80", "9443"])
+    monkeypatch.setattr(ui, "ask_text", lambda *a, **kw: next(answers))
+    monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
+    assert wizard._ask_port(8443) == 9443
+
+
 def test_ask_port_rejects_garbage_until_valid(monkeypatch):
     answer_text(monkeypatch, "abc", "70000", "0", "9443")
     monkeypatch.setattr(ui, "error_panel", lambda *a, **kw: None)
@@ -232,7 +264,7 @@ class FakeCompose:
     calls: list[tuple] = []
     issue_cert = True  # plant the cert file when certbot "runs"
 
-    def __init__(self, project_dir):
+    def __init__(self, project_dir, runner=None, stream_runner=None):
         self.project_dir = project_dir
 
     def up(self):
@@ -262,6 +294,11 @@ def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
     FakeCompose.calls = []
     FakeCompose.issue_cert = True
     monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
+    # Phase 3 goes through restart_services -> nginx -t; stub the validator
+    # (tests must not need Docker), it has its own tests.
+    monkeypatch.setattr(
+        docker_cli, "nginx_config_test", lambda p: subprocess.CompletedProcess([], 0)
+    )
     quiet_panels(monkeypatch)
     quiet_probe(monkeypatch)
     state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")

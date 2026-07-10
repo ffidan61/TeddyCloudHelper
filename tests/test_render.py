@@ -49,6 +49,23 @@ def test_render_to_file_no_backup_on_first_write(tmp_path):
     assert list(tmp_path.glob("*.bak")) == []
 
 
+def test_render_to_file_prunes_old_backups(tmp_path):
+    # Every settings change writes a .bak — without pruning they pile up
+    # forever. The newest KEEP_BACKUPS must survive, oldest go first.
+    dest = tmp_path / "docker-compose.yml"
+    dest.write_text("current")
+    for i in range(render.KEEP_BACKUPS + 5):
+        (tmp_path / f"docker-compose.yml.20260101-0000{i:02}.bak").write_text(str(i))
+
+    render.render_to_file("docker-compose.yml.j2", dest, DIRECT)
+
+    backups = sorted(tmp_path.glob("docker-compose.yml.*.bak"))
+    assert len(backups) == render.KEEP_BACKUPS
+    # The newest pre-existing ones and the just-written one survived.
+    assert backups[-1].name.startswith("docker-compose.yml.2026")
+    assert not (tmp_path / "docker-compose.yml.20260101-000000.bak").exists()
+
+
 # --- docker-compose.yml.j2 ----------------------------------------------------
 
 
@@ -135,11 +152,24 @@ def test_nginx_shared_uses_sni_split():
 
 def test_nginx_separate_passes_443_through():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
-    assert "proxy_pass teddycloud:443;" in text
-    # ssl_preread is on here too (SNI ends up in the access log), but routing
-    # stays hardcoded — no map, unlike the shared-443 SNI split.
-    assert "map $ssl_preread_server_name" not in text
+    # The map only has the default entry — all of 443 belongs to the box.
+    assert "default teddycloud:443;" in text
+    assert "127.0.0.1:8444" not in text
     assert "listen 8443 ssl;" in text
+
+
+def test_nginx_resolves_teddycloud_at_runtime():
+    # proxy_pass must always go through a variable (map / set) plus the
+    # Docker DNS resolver — a literal upstream is resolved once at startup,
+    # and a recreated teddycloud container would leave nginx proxying to a
+    # dead IP after a manual `docker compose up`.
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        assert "resolver 127.0.0.11" in text
+        assert "proxy_pass $upstream_443;" in text
+        assert "proxy_pass $teddycloud_http;" in text
+        assert "proxy_pass teddycloud:443;" not in text
+        assert "proxy_pass http://teddycloud:80;" not in text
 
 
 def test_nginx_box_path_is_never_terminated():
@@ -292,7 +322,7 @@ def test_nginx_port80_serves_box_time_endpoint():
         text = render.render_template("nginx.conf.j2", context)
         port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
         assert "location /v1/" in port80
-        assert "proxy_pass http://teddycloud:80;" in port80
+        assert "proxy_pass $teddycloud_http;" in port80
 
 
 def test_nginx_port80_redirect_targets_webui_port():

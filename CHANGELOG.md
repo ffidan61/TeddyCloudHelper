@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.16.3
+
+- Switching to direct mode (settings or wizard) now resets the Let's
+  Encrypt state (`webui_tls_mode` back to self-signed, certbot flag off):
+  direct mode has no certbot, so the certificate could never renew and the
+  tool would warn about the inevitable expiry at every start — forever.
+  Certificates stay on disk; switching back to nginx picks them up again.
+- The final Let's Encrypt switch-over now goes through the validated
+  restart path (`nginx -t` first): a broken switch (e.g. `privkey.pem`
+  missing although `fullchain.pem` exists) is caught instead of
+  crash-looping nginx and taking the box path down.
+- The WebUI port prompt rejects 80 and 443 — the generated compose file
+  would publish the port twice and fail to start with a cryptic error.
+- nginx now re-resolves the teddycloud container at runtime (Docker DNS
+  resolver + variable `proxy_pass` everywhere, both stream and http): a
+  manual `docker compose pull && up` outside the tool no longer risks nginx
+  proxying to the dead IP of the replaced container.
+- Old render backups are pruned: the newest 10 `.bak` files per config are
+  kept instead of accumulating forever.
+
 ## v0.16.2
 
 - Reissuing a client certificate under an existing name now revokes the old

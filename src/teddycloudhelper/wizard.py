@@ -106,6 +106,14 @@ def _ask_port(default: int) -> int:
         except ValueError:
             ui.error_panel(f"{raw!r} is not a number.")
             continue
+        if port in (80, 443):
+            # The generated compose file would publish the port twice and
+            # `docker compose up` would fail with a cryptic error at start.
+            ui.error_panel(
+                f"Port {port} is already used by this deployment (80 = box "
+                "HTTP + ACME, 443 = box TLS) — pick a different one."
+            )
+            continue
         if 1 <= port <= 65535:
             return port
         ui.error_panel("Port must be between 1 and 65535.")
@@ -276,10 +284,12 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None
     state.webui_tls_mode = "letsencrypt"
     state_mod.save_state(state, project_dir)
     render_project(state, project_dir)
-    compose.up()
-    # nginx.conf is bind-mounted; the compose definition did not change in
-    # this phase, so `up` alone would keep nginx on the self-signed cert.
-    compose.restart()
+    # Validated up + restart: `nginx -t` actually loads the cert/key files,
+    # so a broken switch (e.g. privkey.pem missing although fullchain.pem
+    # exists) is caught here instead of crash-looping nginx and taking the
+    # box path down. The restart is required because nginx.conf is
+    # bind-mounted — `up` alone would keep nginx on the self-signed cert.
+    restart_services(project_dir)
     ui.info_panel(
         f"The WebUI now serves the Let's Encrypt certificate for {hostname}.\n"
         "Renewal runs automatically twice a day (certbot side-container); "
@@ -289,6 +299,32 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None
         f"{letsencrypt.RENEWAL_WARN_DAYS} days remain.",
         title="Let's Encrypt active",
     )
+
+
+def disable_letsencrypt_without_nginx(state: AppState) -> bool:
+    """Reset LE state when the mode has no nginx (and thus no certbot).
+
+    In direct mode the certbot side-container is removed, so the certificate
+    can never renew — leaving ``webui_tls_mode`` on "letsencrypt" would page
+    about the inevitable expiry at every start, forever. Certificates stay on
+    disk; switching back to nginx picks them up again (``cert_exists``).
+    Returns True when something was reset (the caller informs the user).
+    """
+    if state.deployment_mode == "nginx" or (
+        state.webui_tls_mode != "letsencrypt" and not state.letsencrypt_enabled
+    ):
+        return False
+    state.webui_tls_mode = "selfsigned"
+    state.letsencrypt_enabled = False
+    return True
+
+
+LETSENCRYPT_RESET_NOTE = (
+    "Let's Encrypt was active, but direct mode has no nginx/certbot — expiry "
+    "monitoring is off and the WebUI TLS mode is back to self-signed. The "
+    "certificates stay on disk; switching back to nginx mode picks them up "
+    "again."
+)
 
 
 def render_project(state: AppState, project_dir: Path) -> list[Path]:
@@ -428,6 +464,8 @@ def run() -> None:
             )
         else:
             le = step_letsencrypt(state)
+    elif disable_letsencrypt_without_nginx(state):
+        ui.info_panel(LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")
 
     state_mod.save_state(state, project_dir)
     state_mod.save_last_project(project_dir)

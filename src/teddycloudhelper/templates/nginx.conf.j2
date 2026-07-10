@@ -21,12 +21,18 @@ stream {
                              'bytes=$bytes_sent/$bytes_received time=$session_time';
     access_log /dev/stdout stream_route;
 
-{%- if webui_port_mode == "shared" %}
-    # SNI split: the WebUI hostname is terminated locally (loopback server
-    # below); everything else — including boxes that send no SNI at all —
-    # is passed through untouched to TeddyCloud.
+    # The upstream is a map/variable (not a literal proxy_pass) in BOTH
+    # modes so nginx re-resolves the teddycloud container IP at runtime
+    # (resolver below) instead of caching it at startup — a recreated
+    # teddycloud container (image update via plain `docker compose up`)
+    # would otherwise leave nginx proxying to a dead IP until a restart.
     map $ssl_preread_server_name $upstream_443 {
+{%- if webui_port_mode == "shared" %}
+        # SNI split: the WebUI hostname is terminated locally (loopback
+        # server below); everything else — including boxes, which send no
+        # SNI at all — is passed through untouched to TeddyCloud.
         {{ webui_hostname }} 127.0.0.1:8444;
+{%- endif %}
         default teddycloud:443;
     }
 
@@ -36,18 +42,12 @@ stream {
         resolver 127.0.0.11 valid=30s;
         proxy_pass $upstream_443;
     }
-{%- else %}
-    # Separate WebUI port: all of 443 belongs to the box path. ssl_preread
-    # is only enabled here for the access log above — routing is fixed.
-    server {
-        listen 443;
-        ssl_preread on;
-        proxy_pass teddycloud:443;
-    }
-{%- endif %}
 }
 
 http {
+    # Docker's internal DNS; re-resolve the teddycloud container at runtime
+    # (see the stream block) — proxy_pass uses a variable for that.
+    resolver 127.0.0.11 valid=30s;
     # TAF uploads through the WebUI can be huge — no body size limit.
     client_max_body_size 0;
     # TeddyCloud can take minutes to consume large uploads (ESP32 firmware
@@ -80,7 +80,8 @@ http {
         # first TLS handshake — certificate validation needs a correct
         # clock. A redirect here bricks the box's boot sequence.
         location /v1/ {
-            proxy_pass http://teddycloud:80;
+            set $teddycloud_http http://teddycloud:80;
+            proxy_pass $teddycloud_http;
             proxy_set_header Host $host;
         }
         # ACME HTTP-01 challenge — must stay reachable for everyone.
@@ -133,7 +134,8 @@ http {
 {%- endif %}
 
         location / {
-            proxy_pass http://teddycloud:80;
+            set $teddycloud_http http://teddycloud:80;
+            proxy_pass $teddycloud_http;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto https;
             proxy_http_version 1.1;

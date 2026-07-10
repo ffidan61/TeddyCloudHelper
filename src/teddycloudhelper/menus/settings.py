@@ -169,6 +169,8 @@ def _mode(state: AppState, project: Path) -> None:
     ):
         return
     state.deployment_mode = "direct"
+    if wizard.disable_letsencrypt_without_nginx(state):
+        ui.info_panel(wizard.LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")
     _apply(state, project)
 
 
