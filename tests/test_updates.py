@@ -27,7 +27,46 @@ def test_latest_helper_tag_none_on_network_error(monkeypatch):
         raise OSError("no network")
 
     monkeypatch.setattr(updates, "_get_json", boom)
+    monkeypatch.setattr(updates, "_tag_names_from_git", lambda url: None)
     assert updates.latest_helper_tag() is None
+
+
+def test_latest_helper_tag_falls_back_to_git(monkeypatch):
+    # The anonymous GitHub API 404s while the repo is private — git
+    # ls-remote over the install SSH URL must take over.
+    def api_404(url):
+        raise OSError("HTTP Error 404")
+
+    monkeypatch.setattr(updates, "_get_json", api_404)
+    monkeypatch.setattr(
+        updates, "_tag_names_from_git", lambda url: ["v0.9.0", "v0.15.0", "latest"]
+    )
+    assert updates.latest_helper_tag() == "v0.15.0"
+
+
+def test_git_tag_names_parses_ls_remote(monkeypatch):
+    class Done:
+        returncode = 0
+        stdout = (
+            "abc\trefs/tags/v0.14.0\n"
+            "def\trefs/tags/v0.15.0\n"
+            "ghi\trefs/tags/v0.15.0^{}\n"  # annotated-tag deref entry
+        )
+
+    monkeypatch.setattr(updates.subprocess, "run", lambda *a, **kw: Done())
+    assert updates._tag_names_from_git("git@example:x.git") == [
+        "v0.14.0",
+        "v0.15.0",
+        "v0.15.0",
+    ]
+
+
+def test_git_tag_names_none_when_git_fails(monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("git not found")
+
+    monkeypatch.setattr(updates.subprocess, "run", boom)
+    assert updates._tag_names_from_git("git@example:x.git") is None
 
 
 def test_update_notice_when_newer_available(monkeypatch):
