@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.17.0
+
+- New certificate-menu action "Send a client certificate to a phone
+  (one-time link + QR)": serves the chosen `.p12` exactly once at an
+  unguessable token URL on an ephemeral port (max. 5 minutes, gone after
+  the download, the timeout, or Ctrl-C) and renders the link as a
+  scannable QR code in the terminal. The machine's primary IP is detected
+  as the default address and can be edited (VPN / other interface). The
+  trust model is explained up front: anyone seeing the link during the
+  window can fetch the file — the `.p12` password still protects the key
+  itself. New dependency: `qrcode` (pure Python).
+
 ## v0.16.3
 
 - Switching to direct mode (settings or wizard) now resets the Let's
