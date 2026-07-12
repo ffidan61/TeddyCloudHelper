@@ -26,6 +26,9 @@ dependencies = [
     "cryptography>=42.0",
     "bcrypt>=4.0",
     "platformdirs>=4.0",
+    # Terminal QR codes for the one-time .p12 download link (pure Python,
+    # print_ascii needs no image backend).
+    "qrcode>=7.4",
 ]
 
 [project.urls]

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rich.table import Table
 
-from teddycloudhelper import docker_cli, ui, wizard
+from teddycloudhelper import docker_cli, share, ui, wizard
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import (
     box_certs,
@@ -24,6 +24,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Create WebUI CA", "create_ca"),
     ("Issue a client certificate (browser access)", "issue"),
     ("List client certificates", "list"),
+    ("Send a client certificate to a phone (one-time link + QR)", "share"),
     ("Revoke a client certificate", "revoke"),
     ("Create self-signed WebUI server certificate", "server_cert"),
     ("Set up Let's Encrypt for the WebUI", "letsencrypt"),
@@ -103,6 +104,54 @@ def _list(project: Path) -> None:
         status = "[red]revoked[/red]" if info.serial in revoked else "[green]valid[/green]"
         table.add_row(info.name, str(info.serial), f"{info.not_valid_after:%Y-%m-%d}", status)
     ui.console.print(table)
+
+
+def _share_p12(project: Path) -> None:
+    """One-time LAN download of a .p12 — the sane way to reach a phone."""
+    infos = [i for i in client_certs.list_client_certs(project) if i.p12_path.is_file()]
+    if not infos:
+        ui.info_panel("No client certificates with a .p12 bundle yet — issue one first.")
+        return
+    choices = [(f"{info.name} (serial {info.serial})", info.name) for info in infos]
+    name = ui.menu("Send which certificate?", choices)
+    info = next(i for i in infos if i.name == name)
+    host = ui.ask_text(
+        "Address the phone should connect to (this machine's LAN IP):",
+        default=share.lan_ip() or "",
+    ).strip()
+    if not host:
+        ui.error_panel("Without an address there is no link the phone could reach.")
+        return
+    ui.warn_panel(
+        "The link works for 5 minutes and for a SINGLE download, then it is "
+        "dead. Anyone on the network who sees the link can fetch the file "
+        "during that window — the .p12 password (if you set one) still "
+        "protects the key itself. Phone and this machine must be on the "
+        "same network.",
+        title="One-time download",
+    )
+    one = share.OneTimeShare(info.p12_path, host)
+    ui.console.print(f"\n[bold]{one.url}[/bold]\n")
+    share.print_qr(one.url)
+    ui.console.print("[dim]Waiting for the download — Ctrl-C aborts.[/dim]")
+    try:
+        downloaded = one.serve_until_downloaded()
+    except KeyboardInterrupt:
+        ui.info_panel("Aborted — the link is dead.")
+        return
+    if downloaded:
+        ui.info_panel(
+            f"{info.p12_path.name} was downloaded — the link is now dead.\n\n"
+            "Import it on the device: iOS under Settings → General → VPN & "
+            "Device Management; Android via Settings → Security → Install "
+            "certificates; desktop browsers in their certificate settings.",
+            title="Certificate delivered",
+        )
+    else:
+        ui.warn_panel(
+            "Nothing was downloaded within 5 minutes — the link expired. "
+            "Run the action again for a fresh one."
+        )
 
 
 def _revoke(project: Path) -> None:
@@ -263,6 +312,7 @@ _HANDLERS = {
     "create_ca": _create_ca,
     "issue": _issue,
     "list": _list,
+    "share": _share_p12,
     "revoke": _revoke,
     "server_cert": _server_cert,
     "letsencrypt": _letsencrypt,
