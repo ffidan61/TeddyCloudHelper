@@ -50,6 +50,24 @@ def test_step_run_as_enables_non_root(monkeypatch):
     assert (state.puid, state.pgid) == (1000, 985)
 
 
+def test_default_ids_under_sudo_uses_the_invoking_user(monkeypatch):
+    # The tool is sometimes run with sudo (root-owned letsencrypt/) — UID 0
+    # is not a valid PUID, so the default must be the user behind sudo.
+    monkeypatch.setattr(wizard.os, "getuid", lambda: 0, raising=False)
+    monkeypatch.setattr(wizard.os, "getgid", lambda: 0, raising=False)
+    monkeypatch.setenv("SUDO_UID", "1000")
+    monkeypatch.setenv("SUDO_GID", "985")
+    assert wizard.default_ids() == (1000, 985)
+
+
+def test_default_ids_plain_root_falls_back(monkeypatch):
+    monkeypatch.setattr(wizard.os, "getuid", lambda: 0, raising=False)
+    monkeypatch.setattr(wizard.os, "getgid", lambda: 0, raising=False)
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+    assert wizard.default_ids() == (1000, 1000)
+
+
 def test_step_run_as_declined_resets_to_root(monkeypatch):
     # Re-running the wizard and declining must actually turn the option off,
     # not silently keep the old UID.

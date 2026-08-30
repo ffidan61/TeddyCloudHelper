@@ -65,10 +65,22 @@ def step_image_tag(state: AppState) -> None:
 
 
 def default_ids() -> tuple[int, int]:
-    """The invoking user's UID/GID — the natural owner of the project dirs."""
-    if hasattr(os, "getuid"):
-        return os.getuid(), os.getgid()
-    return 1000, 1000  # non-POSIX fallback; the prompt lets the user edit it
+    """The invoking user's UID/GID — the natural owner of the project dirs.
+
+    Under sudo the effective UID is 0, which is not a valid PUID (0 means
+    "stay root") — use the user who invoked sudo instead. The remaining
+    fallback (real root login, non-POSIX) is just a sane prompt default;
+    the prompt lets the user edit it.
+    """
+    if not hasattr(os, "getuid"):
+        return 1000, 1000
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        try:
+            return int(os.environ["SUDO_UID"]), int(os.environ["SUDO_GID"])
+        except (KeyError, ValueError):
+            return 1000, 1000
+    return uid, gid
 
 
 def ask_ids(default_uid: int, default_gid: int) -> tuple[int, int]:
