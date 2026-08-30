@@ -39,6 +39,28 @@ def test_step_image_tag(monkeypatch):
     assert state.teddycloud_image_tag == "develop"
 
 
+def test_step_run_as_enables_non_root(monkeypatch):
+    state = AppState()
+    answer_confirm(monkeypatch, True)
+    answer_text(monkeypatch, "1000", "985")
+    monkeypatch.setattr(ui, "warn_panel", lambda *a, **kw: None)
+
+    wizard.step_run_as(state)
+
+    assert (state.puid, state.pgid) == (1000, 985)
+
+
+def test_step_run_as_declined_resets_to_root(monkeypatch):
+    # Re-running the wizard and declining must actually turn the option off,
+    # not silently keep the old UID.
+    state = AppState(puid=1000, pgid=1000)
+    answer_confirm(monkeypatch, False)
+
+    wizard.step_run_as(state)
+
+    assert (state.puid, state.pgid) == (0, 0)
+
+
 def test_step_webui_separate_port(monkeypatch):
     state = AppState()
     answer_text(monkeypatch, "tc.home.arpa", "9443")

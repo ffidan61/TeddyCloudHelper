@@ -53,6 +53,10 @@ class AppState:
     deployment_mode: str = "direct"
     # Image channel: "latest" (stable) or "develop" (bleeding edge).
     teddycloud_image_tag: str = "latest"
+    # Run the TeddyCloud process as this host UID/GID instead of root
+    # (upstream PUID/PGID support since v0.7.0; 0 = keep running as root).
+    puid: int = 0
+    pgid: int = 0
     # "shared" (WebUI and box share 443 via SNI split) or "separate" (own port).
     webui_port_mode: str = "separate"
     webui_hostname: str = ""

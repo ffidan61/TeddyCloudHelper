@@ -138,6 +138,39 @@ def test_image_channel_same_tag_is_a_noop(tmp_path, monkeypatch, quiet):
     assert not (tmp_path / "docker-compose.yml").exists()
 
 
+def test_run_as_enable_renders_puid_env(tmp_path, monkeypatch, quiet):
+    state = AppState(deployment_mode="direct")
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "nonroot")
+    answers = iter(["1000", "985"])
+    monkeypatch.setattr(ui, "ask_text", lambda *a, **kw: next(answers))
+    no_restart(monkeypatch)
+
+    settings._run_as(state, tmp_path)
+
+    assert (state.puid, state.pgid) == (1000, 985)
+    assert 'PUID: "1000"' in (tmp_path / "docker-compose.yml").read_text()
+
+
+def test_run_as_back_to_root_drops_env(tmp_path, monkeypatch, quiet):
+    state = AppState(deployment_mode="direct", puid=1000, pgid=985)
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "root")
+    no_restart(monkeypatch)
+
+    settings._run_as(state, tmp_path)
+
+    assert (state.puid, state.pgid) == (0, 0)
+    assert "PUID" not in (tmp_path / "docker-compose.yml").read_text()
+
+
+def test_run_as_root_already_root_is_a_noop(tmp_path, monkeypatch, quiet):
+    state = AppState(deployment_mode="direct")
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "root")
+
+    settings._run_as(state, tmp_path)
+
+    assert not (tmp_path / "docker-compose.yml").exists()
+
+
 def test_rerender_asks_before_replacing_a_foreign_compose(tmp_path, monkeypatch, quiet):
     # The doctor's mount check points adopted installs (hand-written compose)
     # at this action — it must not silently replace their file.

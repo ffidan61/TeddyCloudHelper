@@ -4,6 +4,14 @@ services:
     image: ghcr.io/toniebox-reverse-engineering/teddycloud:{{ teddycloud_image_tag }}
     container_name: teddycloud
     restart: unless-stopped
+{%- if puid %}
+    # Drop root: the entrypoint creates a user with this UID/GID, chowns
+    # /teddycloud (bind mounts included) and starts TeddyCloud as that user.
+    # TeddyCloud >= v0.7.0; older images ignore these and keep running as root.
+    environment:
+      PUID: "{{ puid }}"
+      PGID: "{{ pgid }}"
+{%- endif %}
     healthcheck:
       # /api/stats is a cheap, always-on endpoint; curl ships in the image.
       test: ["CMD", "curl", "-fsS", "http://localhost:80/api/stats"]

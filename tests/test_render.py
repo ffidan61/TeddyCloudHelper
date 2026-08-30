@@ -7,6 +7,8 @@ from teddycloudhelper import doctor, render
 DIRECT = {
     "deployment_mode": "direct",
     "teddycloud_image_tag": "latest",
+    "puid": 0,
+    "pgid": 0,
     "webui_port_mode": "separate",
     "webui_hostname": "tc.example.com",
     "webui_port": 8443,
@@ -76,6 +78,24 @@ def test_compose_image_tag():
         "docker-compose.yml.j2", DIRECT | {"teddycloud_image_tag": "develop"}
     )
     assert "image: ghcr.io/toniebox-reverse-engineering/teddycloud:develop" in text
+
+
+def test_compose_puid_pgid_env():
+    text = render.render_template(
+        "docker-compose.yml.j2", DIRECT | {"puid": 1000, "pgid": 985}
+    )
+    # Quoted so YAML keeps them strings — compose passes env values verbatim.
+    assert 'PUID: "1000"' in text
+    assert 'PGID: "985"' in text
+
+
+def test_compose_root_default_has_no_puid_env():
+    # puid == 0 means "keep running as root" — the env block must be absent
+    # entirely, not present with 0 (the entrypoint treats unset and 0 alike,
+    # but an explicit 0 would suggest a deliberate choice to a reader).
+    text = render.render_template("docker-compose.yml.j2", DIRECT)
+    assert "PUID" not in text
+    assert "PGID" not in text
 
 
 def test_compose_mounts_all_upstream_data_dirs():

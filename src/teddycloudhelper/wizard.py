@@ -8,6 +8,7 @@ the standard cycle — save state, render templates (with ``.bak``), prompt for
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -60,6 +61,62 @@ def step_image_tag(state: AppState) -> None:
             ("latest — stable releases (recommended)", "latest"),
             ("develop — newest features, may break", "develop"),
         ],
+    )
+
+
+def default_ids() -> tuple[int, int]:
+    """The invoking user's UID/GID — the natural owner of the project dirs."""
+    if hasattr(os, "getuid"):
+        return os.getuid(), os.getgid()
+    return 1000, 1000  # non-POSIX fallback; the prompt lets the user edit it
+
+
+def ask_ids(default_uid: int, default_gid: int) -> tuple[int, int]:
+    """Prompt for a PUID/PGID pair (positive integers; 0/root not offered —
+    that is what disabling the option means)."""
+    return (
+        _ask_id("User ID (PUID) to run TeddyCloud as:", default_uid),
+        _ask_id("Group ID (PGID) to run TeddyCloud as:", default_gid),
+    )
+
+
+def _ask_id(prompt: str, default: int) -> int:
+    while True:
+        raw = ui.ask_text(prompt, default=str(default)).strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            ui.error_panel(f"{raw!r} is not a number.")
+            continue
+        if value >= 1:
+            return value
+        ui.error_panel("Must be 1 or higher (running as root = disable the option).")
+
+
+def step_run_as(state: AppState) -> None:
+    """Optionally drop root via the upstream PUID/PGID entrypoint support.
+
+    TeddyCloud >= v0.7.0: the entrypoint creates a matching user, runs
+    ``chown -R`` over /teddycloud (i.e. all bind-mounted data dirs) and
+    starts TeddyCloud as that user. Older images ignore the variables and
+    keep running as root — so this is safe to enable on any channel.
+    """
+    uid, gid = (state.puid, state.pgid) if state.puid else default_ids()
+    if not ui.confirm(
+        f"Run TeddyCloud as your user (UID {uid}) instead of root? "
+        "(TeddyCloud v0.7.0+; older images ignore this and stay root)",
+        default=bool(state.puid),
+    ):
+        state.puid = 0
+        state.pgid = 0
+        return
+    state.puid, state.pgid = ask_ids(uid, gid)
+    ui.warn_panel(
+        "On every container start the entrypoint runs `chown -R` over "
+        "/teddycloud — ownership of the project's data directories on the "
+        "host changes to this UID/GID, and the first start can take a while "
+        "with a large library.",
+        title="Non-root mode",
     )
 
 
@@ -336,6 +393,8 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
     context = {
         "deployment_mode": state.deployment_mode,
         "teddycloud_image_tag": state.teddycloud_image_tag,
+        "puid": state.puid,
+        "pgid": state.pgid,
         "webui_port_mode": state.webui_port_mode,
         "webui_hostname": state.webui_hostname,
         "webui_port": state.webui_port,
@@ -448,6 +507,7 @@ def run() -> None:
 
     step_deployment_mode(state)
     step_image_tag(state)
+    step_run_as(state)
     le: str | None = None
     if state.deployment_mode == "nginx":
         step_webui(state)

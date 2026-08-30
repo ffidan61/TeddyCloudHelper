@@ -23,6 +23,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Change WebUI hostname", "hostname"),
     ("Change where the WebUI listens (own port / shared 443)", "port_mode"),
     ("Switch TeddyCloud image channel (latest / develop)", "image"),
+    ("Run TeddyCloud as non-root (PUID/PGID)", "run_as"),
     ("Switch deployment mode (direct / nginx)", "mode"),
     ("Security (Basic Auth, client certificates, IP allowlist)", "security"),
     ("Re-render config files (after a TeddyCloudHelper update)", "rerender"),
@@ -34,6 +35,8 @@ def _show(state: AppState, project: Path) -> None:
     lines = [
         f"Deployment mode:   {state.deployment_mode}",
         f"Image channel:     {state.teddycloud_image_tag}",
+        "Runs as:           "
+        + (f"UID {state.puid} / GID {state.pgid}" if state.puid else "root"),
         f"WebUI hostname:    {state.webui_hostname or '—'}",
         "WebUI listens on:  "
         + (
@@ -154,6 +157,47 @@ def _image_channel(state: AppState, project: Path) -> None:
         wizard.restart_services(project)
 
 
+def _run_as(state: AppState, project: Path) -> None:
+    """Toggle the upstream PUID/PGID non-root support (TeddyCloud >= v0.7.0)."""
+    current = f"UID {state.puid} / GID {state.pgid}" if state.puid else "root"
+    choice = ui.menu(
+        f"TeddyCloud currently runs as {current} — change to?",
+        [
+            ("Non-root: run as a host user via PUID/PGID (recommended)", "nonroot"),
+            ("Root — the pre-v0.7.0 behaviour", "root"),
+        ],
+    )
+    if choice == "root":
+        if not state.puid:
+            ui.info_panel("Already running as root — nothing to do.")
+            return
+        state.puid = 0
+        state.pgid = 0
+        ui.info_panel(
+            "Back to root. Files chowned by an earlier non-root start keep "
+            "their ownership — the root process can read them regardless."
+        )
+    else:
+        uid, gid = (state.puid, state.pgid) if state.puid else wizard.default_ids()
+        puid, pgid = wizard.ask_ids(uid, gid)
+        if (puid, pgid) == (state.puid, state.pgid):
+            ui.info_panel(f"Already running as UID {puid} / GID {pgid} — nothing to do.")
+            return
+        state.puid, state.pgid = puid, pgid
+        ui.warn_panel(
+            "Needs the TeddyCloud v0.7.0+ image (older images ignore the "
+            "variables and stay root — pull first if unsure). On every "
+            "container start the entrypoint runs `chown -R` over /teddycloud, "
+            "so ownership of the project's data directories on the host "
+            "changes to this UID/GID; the first start can take a while with "
+            "a large library.",
+            title="Non-root mode",
+        )
+    if not _foreign_compose_ok(project):
+        return
+    _apply(state, project)
+
+
 def _mode(state: AppState, project: Path) -> None:
     if state.deployment_mode == "direct":
         ui.error_panel(
@@ -193,6 +237,7 @@ _HANDLERS = {
     "hostname": _hostname,
     "port_mode": _port_mode,
     "image": _image_channel,
+    "run_as": _run_as,
     "mode": _mode,
     "rerender": _rerender,
 }
