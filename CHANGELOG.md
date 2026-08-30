@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.18.0
+
+- New "Run TeddyCloud as non-root (PUID/PGID)" option — asked once in the
+  setup wizard (after the image channel) and toggleable under Project
+  settings: uses TeddyCloud v0.7.0's entrypoint support to run the server
+  as a host user instead of root (default: the invoking user's UID/GID).
+  Older images simply ignore the variables and keep running as root, so
+  the option is safe on any channel. The prompts warn that the entrypoint
+  runs `chown -R` over /teddycloud on every container start — ownership
+  of the project's data directories on the host changes accordingly, and
+  the first start can take a while with a large library.
+
 ## v0.17.0
 
 - New certificate-menu action "Send a client certificate to a phone
