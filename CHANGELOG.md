@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.18.1
+
+- Fixed the PUID/PGID prompt default when the tool runs via sudo: the
+  effective UID is 0 there — not a valid PUID — so the prompt rejected
+  its own default forever. The default is now the user who invoked sudo
+  (`SUDO_UID`/`SUDO_GID`); a plain root login falls back to 1000.
+
 ## v0.18.0
 
 - New "Run TeddyCloud as non-root (PUID/PGID)" option — asked once in the
