@@ -76,10 +76,30 @@ def test_hostname_unchanged_is_a_noop(tmp_path, monkeypatch, quiet):
     assert not (tmp_path / "docker-compose.yml").exists()  # nothing rendered
 
 
-def test_mode_switch_to_nginx_requires_wizard(tmp_path, monkeypatch, quiet):
+def test_mode_switch_to_nginx_runs_wizard_steps(tmp_path, monkeypatch, quiet):
+    # direct -> nginx now runs the wizard's nginx steps inline instead of
+    # bailing out to the full setup wizard.
     state = AppState(deployment_mode="direct")
+    # confirm: switch=yes, require-client-certs=no, enable-basic-auth=no,
+    # restart=no
+    answers = iter([True, False, False, False])
+    monkeypatch.setattr(ui, "confirm", lambda *a, **kw: next(answers))
+    monkeypatch.setattr(ui, "ask_text", lambda *a, **kw: "tc.example.com")
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "shared")  # WebUI on 443
 
-    settings._mode(state, tmp_path)  # only shows an error panel
+    settings._mode(state, tmp_path)
+
+    assert state.deployment_mode == "nginx"
+    assert state.webui_hostname == "tc.example.com"
+    assert server_certs.webui_cert_matches(tmp_path, "tc.example.com")
+    assert "nginx" in (tmp_path / "docker-compose.yml").read_text()
+
+
+def test_mode_switch_to_nginx_declined_is_a_noop(tmp_path, monkeypatch, quiet):
+    state = AppState(deployment_mode="direct")
+    monkeypatch.setattr(ui, "confirm", lambda *a, **kw: False)  # decline switch
+
+    settings._mode(state, tmp_path)
 
     assert state.deployment_mode == "direct"
     assert not (tmp_path / "docker-compose.yml").exists()

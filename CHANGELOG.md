@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.19.0
+
+- Project settings can now switch a deployment from direct to nginx mode
+  without re-running the whole setup wizard: the "Switch deployment mode"
+  action runs the wizard's nginx steps inline (WebUI hostname, self-signed
+  certificate, optional client-cert auth, access protection), then
+  re-renders and restarts. Let's Encrypt stays a separate step in the
+  certificate menu. (Previously this direction was a dead end that only
+  pointed back at the wizard.)
+- New main-menu action "Switch project": pick among recently used project
+  directories instead of re-typing the path every time (for setups running
+  several instances, e.g. tc2/tc3). The global config now keeps a
+  `recent_projects` list (newest first, deduplicated, capped at 10,
+  gone-directory entries dropped on read); an existing config with only
+  `last_project` is upgraded automatically on the next save. The startup
+  banner hints at the switcher when more than one project is known.
+
 ## v0.18.1
 
 - Fixed the PUID/PGID prompt default when the tool runs via sudo: the

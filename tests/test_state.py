@@ -129,3 +129,65 @@ def test_last_project_pointer_to_missing_dir(tmp_path, monkeypatch):
     state.save_last_project(project)
     project.rmdir()
     assert state.load_last_project() is None
+
+
+def test_recent_projects_newest_first_no_duplicates(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_global_config_path", lambda: tmp_path / "cfg" / "config.json")
+    a, b, c = (tmp_path / n for n in ("a", "b", "c"))
+    for directory in (a, b, c):
+        directory.mkdir()
+
+    state.save_last_project(a)
+    state.save_last_project(b)
+    state.save_last_project(c)
+    state.save_last_project(a)  # revisiting a only moves it to the front
+
+    assert state.load_recent_projects() == [a.resolve(), c.resolve(), b.resolve()]
+    assert state.load_last_project() == a.resolve()
+
+
+def test_recent_projects_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_global_config_path", lambda: tmp_path / "cfg" / "config.json")
+    monkeypatch.setattr(state, "RECENT_PROJECTS_CAP", 3)
+    for i in range(5):
+        directory = tmp_path / f"p{i}"
+        directory.mkdir()
+        state.save_last_project(directory)
+
+    recent = state.load_recent_projects()
+    assert len(recent) == 3
+    assert recent[0] == (tmp_path / "p4").resolve()
+
+
+def test_recent_projects_drops_missing_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_global_config_path", lambda: tmp_path / "cfg" / "config.json")
+    kept, gone = tmp_path / "kept", tmp_path / "gone"
+    kept.mkdir()
+    gone.mkdir()
+    state.save_last_project(kept)
+    state.save_last_project(gone)
+    gone.rmdir()
+
+    assert state.load_recent_projects() == [kept.resolve()]
+
+
+def test_recent_projects_empty_when_never_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_global_config_path", lambda: tmp_path / "cfg" / "config.json")
+    assert state.load_recent_projects() == []
+
+
+def test_save_last_project_upgrades_legacy_config(tmp_path, monkeypatch):
+    """A pre-existing config.json with only last_project (no recent_projects)
+    gains the list on the next save without losing the pointer."""
+    monkeypatch.setattr(state, "_global_config_path", lambda: tmp_path / "cfg" / "config.json")
+    project = tmp_path / "legacy"
+    project.mkdir()
+    config = tmp_path / "cfg" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"last_project": str(project.resolve())}))
+
+    other = tmp_path / "other"
+    other.mkdir()
+    state.save_last_project(other)
+
+    assert state.load_recent_projects() == [other.resolve(), project.resolve()]

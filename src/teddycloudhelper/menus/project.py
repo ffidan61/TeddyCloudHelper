@@ -75,3 +75,27 @@ def active_project() -> Path | None:
         "TeddyCloud compose file."
     )
     return adopt_project()
+
+
+def switch_project() -> Path | None:
+    """Pick among recently used projects (or adopt another directory) and make
+    it the active project. Returns the chosen directory, or None on cancel."""
+    recent = state_mod.load_recent_projects()
+    if not recent:
+        return adopt_project()
+    other = "\0other"  # sentinel that cannot collide with a real path
+    choice = ui.menu(
+        "Switch to which project?",
+        [(str(p), str(p)) for p in recent] + [("Other directory…", other)],
+    )
+    if choice == other:
+        return adopt_project()
+    directory = Path(choice)
+    if docker_cli.find_compose_file(directory) is None:
+        ui.error_panel(
+            f"{directory} no longer has a compose file — pick another directory."
+        )
+        return None
+    state_mod.save_last_project(directory)
+    ui.info_panel(f"Active project is now {directory}.")
+    return directory

@@ -84,3 +84,57 @@ def test_active_project_falls_back_to_adopt(tmp_path, project, monkeypatch):
     answer_confirm(monkeypatch, True)
 
     assert project_menu.active_project() == project.resolve()
+
+
+def answer_menu(monkeypatch, value):
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: value)
+
+
+def _make_project(tmp_path, name):
+    directory = tmp_path / name
+    directory.mkdir()
+    (directory / "docker-compose.yml").write_text("services: {}\n")
+    return directory
+
+
+def test_switch_project_selects_recent(tmp_path, monkeypatch):
+    tc2 = _make_project(tmp_path, "tc2")
+    tc3 = _make_project(tmp_path, "tc3")
+    state.save_last_project(tc2)
+    state.save_last_project(tc3)  # tc3 is now the last used one
+    answer_menu(monkeypatch, str(tc2.resolve()))
+
+    assert project_menu.switch_project() == tc2.resolve()
+    assert state.load_last_project() == tc2.resolve()  # pointer moved to tc2
+
+
+def test_switch_project_with_no_history_adopts(project, monkeypatch):
+    answer_path(monkeypatch, project)
+    answer_confirm(monkeypatch, True)
+
+    assert project_menu.switch_project() == project.resolve()
+
+
+def test_switch_project_other_directory_adopts(tmp_path, monkeypatch):
+    existing = _make_project(tmp_path, "existing")
+    state.save_last_project(existing)
+    fresh = _make_project(tmp_path, "fresh")
+    # Pick the "Other directory…" sentinel, then adopt `fresh`.
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "\0other")
+    answer_path(monkeypatch, fresh)
+    answer_confirm(monkeypatch, True)
+
+    assert project_menu.switch_project() == fresh.resolve()
+    assert state.load_last_project() == fresh.resolve()
+
+
+def test_switch_project_recent_lost_compose_file(tmp_path, monkeypatch):
+    good = _make_project(tmp_path, "good")
+    broken = _make_project(tmp_path, "broken")
+    state.save_last_project(good)
+    state.save_last_project(broken)
+    (broken / "docker-compose.yml").unlink()  # compose file vanished
+    answer_menu(monkeypatch, str(broken.resolve()))
+
+    assert project_menu.switch_project() is None
+    assert state.load_last_project() == broken.resolve()  # pointer unchanged

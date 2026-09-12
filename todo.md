@@ -1,125 +1,12 @@
 # TODO — Kandidaten (lokal, nicht im Repo)
 
-Stand: 2026-09-12, v0.16.3. Offene Punkte oben, erledigte unten zur Historie.
+Stand: 2026-09-12, v0.19.0. Offene Punkte oben, erledigte unten zur Historie.
 Jeder offene Punkt ist so beschrieben, dass ein Entwickler oder eine andere KI
 ihn ohne Rückfrage umsetzen kann (betroffene Dateien, Ist-Zustand, Soll-Zustand).
 
 ## A — Offen: konkrete Implementierungen
 
-### 1. Settings: "direct → nginx" ohne vollen Wizard erlauben
-
-**Datei:** `src/teddycloudhelper/menus/settings.py`, Funktion `_mode()`
-(Zeile ~157–174, siehe unten der volle Ist-Code).
-
-**Ist-Code (kompletter aktueller Zustand):**
-
-```python
-def _mode(state: AppState, project: Path) -> None:
-    if state.deployment_mode == "direct":
-        ui.error_panel(
-            "Switching to nginx mode needs the full setup (hostname, WebUI "
-            "certificates) — run the setup wizard instead."
-        )
-        return
-    if not ui.confirm(
-        "Switch to 'direct' mode? nginx is removed — Basic Auth, client "
-        "certificates, the IP allowlist and Let's Encrypt stop working "
-        "(TeddyCloud publishes its ports itself).",
-        default=False,
-    ):
-        return
-    state.deployment_mode = "direct"
-    if wizard.disable_letsencrypt_without_nginx(state):
-        ui.info_panel(wizard.LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")
-    _apply(state, project)
-```
-
-Der `nginx → direct`-Zweig (unterer Teil) ist fertig und dient als Vorlage für
-den Stil (Bestätigungsfrage, `_apply` am Ende). Der `direct → nginx`-Zweig
-(oberer `if`) ist der Lückenfüller-Abbruch, den es zu ersetzen gilt.
-
-**Soll-Code** — den oberen `if`-Block ersetzen durch einen Aufruf derselben
-Step-Funktionen, die `wizard.run()` (Datei `wizard.py`, Zeilen 449–476) für
-den nginx-Zweig verwendet:
-
-```python
-def _mode(state: AppState, project: Path) -> None:
-    if state.deployment_mode == "direct":
-        if not ui.confirm(
-            "Switch to 'nginx' mode? This walks through the WebUI hostname, "
-            "certificates, and access protection just like the setup "
-            "wizard's nginx branch.",
-            default=True,
-        ):
-            return
-        wizard.step_webui(state)
-        wizard.step_webui_auth(state, project)
-        wizard.step_first_client_cert(state, project)
-        wizard.step_protection(state, project)
-        # step_letsencrypt() bewusst NICHT hier: es fragt "Get a free LE
-        # cert?" und setzt keinen State direkt — der Rückgabewert wird in
-        # wizard.run() an setup_letsencrypt() weitergereicht, was hier den
-        # simplen "_apply, dann fertig"-Ablauf verkomplizieren würde. Wer LE
-        # will, richtet es danach über den bestehenden Zertifikatsmenü-Weg
-        # ein (dort ist der Ablauf schon vollständig implementiert).
-        state.deployment_mode = "nginx"
-        _apply(state, project)
-        return
-    if not ui.confirm(
-        "Switch to 'direct' mode? nginx is removed — Basic Auth, client "
-        "certificates, the IP allowlist and Let's Encrypt stop working "
-        "(TeddyCloud publishes its ports itself).",
-        default=False,
-    ):
-        return
-    state.deployment_mode = "direct"
-    if wizard.disable_letsencrypt_without_nginx(state):
-        ui.info_panel(wizard.LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")
-    _apply(state, project)
-```
-
-**Randfälle, die zu beachten sind** (aus dem Studium von `wizard.py`):
-
-- `step_webui()` (Zeile 66–98) fragt Hostname + Port-Modus ab; bei
-  `webui_port_mode == "separate"` zusätzlich `_ask_port()`, das die Ports 80
-  und 443 explizit sperrt (Kollision mit Box-HTTP/TLS) — diese Prüfung ist
-  bereits in der Funktion und muss nicht dupliziert werden.
-- `step_webui_auth()` (Zeile 122–146) prüft
-  `server_certs.webui_cert_matches(project, state.webui_hostname)` und legt
-  bei Bedarf ein neues selbstsigniertes Zertifikat an — das greift also auch
-  beim ERSTEN Wechsel von direct→nginx automatisch, kein Sonderfall nötig.
-  Wenn `state.webui_client_cert_auth` von einer früheren nginx-Phase noch
-  `True` ist (State bleibt beim Moduswechsel erhalten!), überspringt die
-  Funktion die Nachfrage und zeigt nur einen Hinweis — das ist gewolltes
-  Verhalten, nicht anfassen.
-- `step_first_client_cert()` (Zeile 149–180) fragt nur, wenn
-  `webui_client_cert_auth` aktiv UND noch kein Zertifikat existiert
-  (`client_certs.list_client_certs(project)` leer) — bei einem Wechsel zurück
-  zu nginx nach vorherigem direct-Intermezzo bleiben alte Client-Certs auf
-  Platte erhalten, es wird korrekt übersprungen.
-- `step_protection()` (Zeile 183–205) verweigert einen ungeschützten WebUI-
-  Zustand nur, wenn WEDER Basic Auth NOCH Client-Certs NOCH IP-Allowlist
-  aktiv sind — bei den meisten Wieder-Aktivierungen (State war vorher schon
-  konfiguriert) ist das bereits erfüllt und die Funktion kehrt sofort zurück.
-- **Nicht vergessen:** `_apply()` (settings.py Zeile 53–59) speichert den
-  State, rendert Templates und bietet einen Neustart an — das deckt den
-  gesamten "TeddyCloud jetzt hinter nginx betreiben"-Übergang ab. Ein Aufruf
-  von `project_menu.confirm_required_ports()` (wie in `wizard.run()` Zeile
-  485) ist hier NICHT nötig, weil `_apply` keinen `compose.up()` macht,
-  sondern nur `restart_services()` — das betrifft nur bereits belegte Ports,
-  keine neuen.
-
-**Test:** neuer Test in `tests/test_menus_settings.py` (oder wo die
-bestehenden `_mode`-Tests liegen), der mit `state.deployment_mode = "direct"`
-startet, die Fragen mockt (Hostname, Port, Basic-Auth ja/nein, Protection),
-`_mode()` aufruft und prüft: `state.deployment_mode == "nginx"`,
-`state.webui_hostname` gesetzt, ein selbstsigniertes Zertifikat existiert
-unter `server_certs.server_dir(project)`, und die Templates wurden neu
-gerendert (z. B. `docker-compose.yml` enthält jetzt den nginx-Service).
-
----
-
-### 2. Custom-Tonies-Menüpunkt
+### 1. Custom-Tonies-Menüpunkt
 
 **Neue/betroffene Dateien:** neue Datei
 `src/teddycloudhelper/menus/tonies.py` (eigenes Modul, nicht in `project.py`
@@ -183,133 +70,7 @@ versehentliches Überschreiben von Nutzerdaten).
 
 ---
 
-### 3. Multi-Projekt-Umschalter
-
-**Datei:** `src/teddycloudhelper/state.py`, Abschnitt "Global pointer (last
-used project)" (Zeile ~149–177). Voller Ist-Code:
-
-```python
-def _global_config_path() -> Path:
-    return Path(user_config_dir("teddycloudhelper")) / "config.json"
-
-
-def load_last_project() -> Path | None:
-    """Return the last used project directory, or None if unknown/gone."""
-    path = _global_config_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    last = data.get("last_project") if isinstance(data, dict) else None
-    if not last:
-        return None
-    project = Path(last)
-    return project if project.is_dir() else None
-
-
-def save_last_project(project_dir: Path) -> None:
-    path = _global_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"last_project": str(project_dir.resolve())}, indent=2) + "\n",
-        encoding="utf-8",
-    )
-```
-
-**Ist-Zustand:** Nur ein Projekt wird gemerkt (`~/.config/teddycloudhelper/
-config.json` unter Windows real `%LOCALAPPDATA%\teddycloudhelper\config.json`,
-via `platformdirs.user_config_dir`) — bei mehreren Instanzen (der Nutzer
-betreibt produktiv `tc2` und `tc3`, siehe Memory "Prod-Setup rffka.de") muss
-der Pfad jedes Mal neu eingegeben werden, wenn zwischen ihnen gewechselt wird.
-
-**Wo `load_last_project()` / `save_last_project()` aktuell aufgerufen werden**
-(mit `Grep` in `cli.py` und `menus/project.py` verifizieren, bevor der Umbau
-beginnt — die genauen Aufrufstellen bestimmen, wo das neue Auswahlmenü
-eingehängt wird):
-- vermutlich beim Programmstart in `cli.py`, um ohne Rückfrage direkt ins
-  zuletzt genutzte Projekt zu springen,
-- in `menus/project.py`, wenn der Nutzer explizit ein Projekt wechselt/öffnet.
-
-**Soll-Code** — `_global_config_path()` bleibt unverändert (ein File für alle
-globalen Daten). Schema erweitern und zwei Funktionen ersetzen/ergänzen:
-
-```python
-RECENT_PROJECTS_CAP = 10
-
-
-def _load_global_config() -> dict:
-    try:
-        data = json.loads(_global_config_path().read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def load_last_project() -> Path | None:
-    last = _load_global_config().get("last_project")
-    if not last:
-        return None
-    project = Path(last)
-    return project if project.is_dir() else None
-
-
-def load_recent_projects() -> list[Path]:
-    """Recently used project directories, newest first. Gone directories
-    are silently dropped — never surface a dead path in the picker."""
-    raw = _load_global_config().get("recent_projects", [])
-    if not isinstance(raw, list):
-        return []
-    seen: list[Path] = []
-    for entry in raw:
-        path = Path(entry)
-        if path.is_dir() and path not in seen:
-            seen.append(path)
-    return seen
-
-
-def save_last_project(project_dir: Path) -> None:
-    resolved = project_dir.resolve()
-    data = _load_global_config()
-    data["last_project"] = str(resolved)
-    recent = [Path(p) for p in data.get("recent_projects", []) if p != str(resolved)]
-    recent.insert(0, resolved)
-    data["recent_projects"] = [str(p) for p in recent[:RECENT_PROJECTS_CAP]]
-    path = _global_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-```
-
-Wichtig: `save_last_project()` bleibt die EINZIGE Schreibstelle — jeder
-bestehende Call-Site, der sie schon aufruft, befüllt `recent_projects`
-dadurch automatisch mit, ohne selbst angepasst werden zu müssen.
-
-**Auswahlmenü in `cli.py`** (an der Stelle, wo aktuell `load_last_project()`
-für den Programmstart genutzt wird): wenn `load_recent_projects()` mehr als
-einen Eintrag liefert, `ui.menu()` mit den Pfaden (Label = Verzeichnisname
-oder voller Pfad, falls Namen mehrdeutig sind — z. B. bei `tc2`/`tc3`
-reichen die Ordnernamen) plus einem letzten Eintrag "Other path…" anzeigen,
-der auf den bisherigen `ui.ask_path(...)`-Fallback zurückfällt. Bei genau
-einem oder null Einträgen bleibt das bisherige Verhalten (direkt übernehmen /
-nach Pfad fragen) unverändert — kein Menü für den Trivialfall.
-
-**Migration/Kompatibilität:** Ein bereits vorhandenes `config.json` mit nur
-`last_project` (alter Stand) wird beim ersten `save_last_project()`-Aufruf
-automatisch um `recent_projects` ergänzt, ohne dass eine Migration nötig ist
-— `_load_global_config()` liefert für ein fehlendes `recent_projects`-Feld
-einfach `[]` zurück (`dict.get`-Fallback), genau wie es `AppState.to_dict()`
-für neue Felder in `state.py` bereits an anderer Stelle macht.
-
-**Test:** `tests/test_state.py` erweitern (dort liegen laut Rules schon die
-Roundtrip-Tests für `AppState`) — neuer Test, der `save_last_project()` für
-drei verschiedene Pfade nacheinander aufruft und prüft: `recent_projects` hat
-3 Einträge, neueste zuerst, keine Duplikate bei erneutem Speichern desselben
-Pfads (er rutscht nur nach vorn), und ein inzwischen gelöschtes Verzeichnis
-taucht in `load_recent_projects()` nicht mehr auf (`tmp_path`-Fixture: Ordner
-anlegen, speichern, Ordner löschen, erneut laden).
-
----
-
-### 4. Support-Paket (anonymisiertes Debug-ZIP)
+### 2. Support-Paket (anonymisiertes Debug-ZIP)
 
 **Vorbild:** TeddyCloudStarter `utilities/support_features.py` (siehe Analyse
 2026-07-06). **Neues Modul:** `src/teddycloudhelper/support.py` (Business-
@@ -450,6 +211,20 @@ Bind-Mount überflüssig, nur Komfort-Menüpunkt siehe A2), Extended-Mode
 
 ## Erledigt (Historie)
 
+- ✅ **v0.19.0 — Settings: "direct → nginx" ohne vollen Wizard**
+  (ursprünglich Punkt A1): `menus/settings.py::_mode()` ruft für den
+  direct→nginx-Wechsel `_switch_to_nginx()` auf, das die Wizard-Steps
+  `step_webui` / `step_webui_auth` / `step_first_client_cert` /
+  `step_protection` inline durchläuft und dann `_apply()` (re-render +
+  Restart) ausführt. Let's Encrypt bleibt bewusst dem Zertifikatsmenü
+  überlassen.
+- ✅ **v0.19.0 — Multi-Projekt-Umschalter** (ursprünglich Punkt A3):
+  Hauptmenü-Aktion "Switch project"; `state.py` führt eine
+  `recent_projects`-Liste (neueste zuerst, dedupliziert, Cap 10,
+  gelöschte Verzeichnisse beim Lesen entfernt), Legacy-Config mit nur
+  `last_project` wird beim nächsten Speichern automatisch aufgewertet;
+  `menus/project.py::switch_project()` mit Recent-Picker + "Other
+  directory…"-Fallback; Startup-Hinweis bei >1 bekannten Projekten.
 - ✅ v0.16.3 — LE-State-Reset bei direct-Mode-Wechsel, validierter
   LE-Switch, Port-Guard, Runtime-DNS in nginx, `.bak`-Pruning
 - ✅ v0.16.0 — Apply-Path-Fixes (`restart_services`) + Doctor Image-ID-Check

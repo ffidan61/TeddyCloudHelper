@@ -200,10 +200,7 @@ def _run_as(state: AppState, project: Path) -> None:
 
 def _mode(state: AppState, project: Path) -> None:
     if state.deployment_mode == "direct":
-        ui.error_panel(
-            "Switching to nginx mode needs the full setup (hostname, WebUI "
-            "certificates) — run the setup wizard instead."
-        )
+        _switch_to_nginx(state, project)
         return
     if not ui.confirm(
         "Switch to 'direct' mode? nginx is removed — Basic Auth, client "
@@ -215,6 +212,28 @@ def _mode(state: AppState, project: Path) -> None:
     state.deployment_mode = "direct"
     if wizard.disable_letsencrypt_without_nginx(state):
         ui.info_panel(wizard.LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")
+    _apply(state, project)
+
+
+def _switch_to_nginx(state: AppState, project: Path) -> None:
+    """Move a direct deployment behind nginx by running the wizard's nginx
+    steps (hostname, WebUI cert, access protection) — same functions the setup
+    wizard uses, so no logic is duplicated."""
+    if not ui.confirm(
+        "Switch to 'nginx' mode? This walks through the WebUI hostname, "
+        "certificates and access protection, then re-renders and restarts.",
+        default=True,
+    ):
+        return
+    wizard.step_webui(state)
+    wizard.step_webui_auth(state, project)
+    wizard.step_first_client_cert(state, project)
+    wizard.step_protection(state, project)
+    # Let's Encrypt is intentionally left for the certificate menu's
+    # "Set up Let's Encrypt" action: its issuance is a multi-phase flow
+    # (enable certbot, run certonly through the webroot, switch nginx over)
+    # that does not fit this menu's simple "save → re-render → restart" cycle.
+    state.deployment_mode = "nginx"
     _apply(state, project)
 
 

@@ -153,28 +153,71 @@ def has_state(project_dir: Path) -> bool:
 # --- Global pointer (last used project) -------------------------------------
 
 
+# How many recently used projects to remember for the switcher.
+RECENT_PROJECTS_CAP = 10
+
+
 def _global_config_path() -> Path:
     return Path(user_config_dir("teddycloudhelper")) / "config.json"
 
 
+def _load_global_config() -> dict:
+    """The global config as a dict, or {} when missing/corrupt."""
+    try:
+        data = json.loads(_global_config_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def load_last_project() -> Path | None:
     """Return the last used project directory, or None if unknown/gone."""
-    path = _global_config_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    last = data.get("last_project") if isinstance(data, dict) else None
+    last = _load_global_config().get("last_project")
     if not last:
         return None
     project = Path(last)
     return project if project.is_dir() else None
 
 
+def load_recent_projects() -> list[Path]:
+    """Recently used project directories, newest first.
+
+    Directories that no longer exist are silently dropped, so a stale entry
+    never shows up in the switcher.
+    """
+    raw = _load_global_config().get("recent_projects", [])
+    if not isinstance(raw, list):
+        return []
+    result: list[Path] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        project = Path(entry)
+        if project.is_dir() and project not in result:
+            result.append(project)
+    return result
+
+
 def save_last_project(project_dir: Path) -> None:
+    """Record ``project_dir`` as the last used project and push it to the
+    front of the recent-projects list (deduplicated, capped)."""
+    resolved = project_dir.resolve()
+    data = _load_global_config()
+
+    # Seed the list from a legacy config that only had last_project, so an
+    # upgraded install keeps its previous project in the switcher.
+    previous = data.get("recent_projects")
+    if not isinstance(previous, list):
+        legacy = data.get("last_project")
+        previous = [legacy] if isinstance(legacy, str) else []
+
+    data["last_project"] = str(resolved)
+    recent = [resolved]
+    for entry in previous:
+        if isinstance(entry, str) and Path(entry) != resolved:
+            recent.append(Path(entry))
+    data["recent_projects"] = [str(p) for p in recent[:RECENT_PROJECTS_CAP]]
+
     path = _global_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"last_project": str(project_dir.resolve())}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

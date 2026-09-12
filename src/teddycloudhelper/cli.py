@@ -23,6 +23,7 @@ from teddycloudhelper.menus import boxes as boxes_menu
 from teddycloudhelper.menus import certs as certs_menu
 from teddycloudhelper.menus import docker as docker_menu
 from teddycloudhelper.menus import doctor as doctor_menu
+from teddycloudhelper.menus import project as project_menu
 from teddycloudhelper.menus import settings as settings_menu
 
 
@@ -62,6 +63,7 @@ def _warn_expiring_cert(project: Path) -> None:
 
 MENU_ACTIONS: list[tuple[str, str]] = [
     ("Set up a new TeddyCloud project", "wizard"),
+    ("Switch project", "switch_project"),
     ("Project settings (change single options)", "settings"),
     ("Health check (doctor)", "doctor"),
     ("Show known boxes", "boxes"),
@@ -78,6 +80,8 @@ def _dispatch(action: str) -> bool:
         return False
     if action == "wizard":
         wizard.run()
+    elif action == "switch_project":
+        project_menu.switch_project()
     elif action == "settings":
         settings_menu.run()
     elif action == "doctor":
@@ -167,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     last_project = state_mod.load_last_project()
     if last_project is not None:
         console.print(f"Last used project: [bold]{last_project}[/bold]")
+        if len(state_mod.load_recent_projects()) > 1:
+            console.print("[dim](use 'Switch project' to change)[/dim]")
         _warn_expiring_cert(last_project)
 
     while True:
