@@ -383,7 +383,7 @@ def test_image_freshness_pulled_but_not_applied_warns():
     # `docker compose restart` after a pull keeps the old image running —
     # the container's image ID then differs from what the local tag points at.
     probes = make_probes(
-        running_image_id=lambda: "sha256:old",
+        running_image_id=lambda service: "sha256:old",
         local_image_id=lambda image: "sha256:new",
     )
     result = doctor.check_image_freshness(AppState(), probes)
@@ -393,7 +393,7 @@ def test_image_freshness_pulled_but_not_applied_warns():
 
 def test_image_freshness_running_matches_local_is_ok():
     probes = make_probes(
-        running_image_id=lambda: "sha256:same",
+        running_image_id=lambda service: "sha256:same",
         local_image_id=lambda image: "sha256:same",
     )
     assert doctor.check_image_freshness(AppState(), probes).status == "ok"
@@ -441,6 +441,80 @@ def test_image_freshness_version_note_absent_without_data():
     # The default probes return None for the version — no appended note.
     result = doctor.check_image_freshness(AppState(), make_probes())
     assert result.detail == "Running the newest 'latest' image."
+
+
+# --- proxy images (nginx / certbot) ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("image", "expected"),
+    [
+        ("nginx:stable-alpine", ("docker.io", "library/nginx", "stable-alpine")),
+        ("certbot/certbot", ("docker.io", "certbot/certbot", "latest")),
+        (
+            "ghcr.io/toniebox-reverse-engineering/teddycloud:develop",
+            ("ghcr.io", "toniebox-reverse-engineering/teddycloud", "develop"),
+        ),
+        ("localhost:5000/foo:1.0", ("localhost:5000", "foo", "1.0")),
+    ],
+)
+def test_parse_image_ref(image, expected):
+    assert doctor.parse_image_ref(image) == expected
+
+
+def test_proxy_images_up_to_date_ok():
+    result = doctor.check_proxy_images(AppState(deployment_mode="nginx"), make_probes())
+    assert result.status == "ok"
+    assert docker_cli.NGINX_IMAGE in result.detail
+    assert doctor.CERTBOT_IMAGE not in result.detail
+
+
+def test_proxy_images_stale_nginx_warns():
+    # A floating tag only gets security fixes with a pull.
+    probes = make_probes(
+        remote_image_digest=lambda image: (
+            "sha256:newer" if image == docker_cli.NGINX_IMAGE else "sha256:abc"
+        )
+    )
+    result = doctor.check_proxy_images(AppState(deployment_mode="nginx"), probes)
+    assert result.status == "warn"
+    assert docker_cli.NGINX_IMAGE in result.detail
+    assert "Pull latest images" in result.detail
+
+
+def test_proxy_images_checks_certbot_only_with_letsencrypt():
+    seen = []
+
+    def local(image):
+        seen.append(image)
+        return "sha256:abc"
+
+    probes = make_probes(local_image_digest=local)
+    doctor.check_proxy_images(AppState(deployment_mode="nginx"), probes)
+    assert seen == [docker_cli.NGINX_IMAGE]
+
+    seen.clear()
+    state = AppState(deployment_mode="nginx", letsencrypt_enabled=True)
+    doctor.check_proxy_images(state, probes)
+    assert seen == [docker_cli.NGINX_IMAGE, doctor.CERTBOT_IMAGE]
+
+
+def test_proxy_images_pulled_but_not_applied_warns():
+    probes = make_probes(
+        running_image_id=lambda service: "sha256:old" if service == "nginx" else None,
+        local_image_id=lambda image: "sha256:new",
+    )
+    result = doctor.check_proxy_images(AppState(deployment_mode="nginx"), probes)
+    assert result.status == "warn"
+    assert "nginx still runs the previously pulled image" in result.detail
+
+
+def test_proxy_images_degrades_without_data():
+    no_local = make_probes(local_image_digest=lambda image: None)
+    state = AppState(deployment_mode="nginx")
+    assert doctor.check_proxy_images(state, no_local).status == "warn"
+    no_remote = make_probes(remote_image_digest=lambda image: None)
+    assert doctor.check_proxy_images(state, no_remote).status == "warn"
 
 
 # --- CA identity / backup ---------------------------------------------------------
@@ -656,6 +730,17 @@ def test_run_checks_includes_letsencrypt_only_when_active(tmp_path):
     )
     names = [r.name for r in doctor.run_checks(tmp_path, state, probes)]
     assert "Let's Encrypt" in names
+
+
+def test_run_checks_includes_proxy_images_only_in_nginx_mode(tmp_path):
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    probes = make_probes()
+    names = [r.name for r in doctor.run_checks(tmp_path, AppState(), probes)]
+    assert "Proxy image freshness" not in names
+
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+    names = [r.name for r in doctor.run_checks(tmp_path, state, probes)]
+    assert "Proxy image freshness" in names
 
 
 def test_run_checks_healthy_project_all_ok(tmp_path):

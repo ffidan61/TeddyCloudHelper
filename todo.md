@@ -1,6 +1,6 @@
-# TODO — Kandidaten (lokal, nicht im Repo)
+# TODO — Kandidaten
 
-Stand: 2026-09-12, v0.19.0. Offene Punkte oben, erledigte unten zur Historie.
+Stand: 2026-10-26, v0.20.0. Offene Punkte oben, erledigte unten zur Historie.
 Jeder offene Punkt ist so beschrieben, dass ein Entwickler oder eine andere KI
 ihn ohne Rückfrage umsetzen kann (betroffene Dateien, Ist-Zustand, Soll-Zustand).
 

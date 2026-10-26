@@ -100,9 +100,9 @@ class Probes:
     local_image_version: Callable[[str], str | None] = lambda image: None
     latest_teddycloud_release: Callable[[], str | None] = lambda: None
     # Image IDs to detect "pulled but never applied": what the running
-    # teddycloud container was created from vs. what the local tag points at
-    # now. None if undeterminable — the comparison is then skipped.
-    running_image_id: Callable[[], str | None] = lambda: None
+    # container of a compose service was created from vs. what the local tag
+    # points at now. None if undeterminable — the comparison is then skipped.
+    running_image_id: Callable[[str], str | None] = lambda service: None
     local_image_id: Callable[[str], str | None] = lambda image: None
 
 
@@ -177,18 +177,42 @@ def _local_image_digest(image: str) -> str | None:
     return out.rsplit("@", 1)[-1] if "@" in out else None
 
 
+def parse_image_ref(image: str) -> tuple[str, str, str]:
+    """``(registry, repository, tag)`` of an image ref, Docker-style:
+    no registry host means Docker Hub, a bare name lives under ``library/``,
+    no tag means ``latest``."""
+    first, _, rest = image.partition("/")
+    if rest and ("." in first or ":" in first):
+        registry, path = first, rest
+    else:
+        registry, path = "docker.io", image
+    name, colon, tag = path.rpartition(":")
+    if not colon:
+        name, tag = path, "latest"
+    if registry == "docker.io" and "/" not in name:
+        name = f"library/{name}"
+    return registry, name, tag
+
+
 def _remote_image_digest(image: str) -> str | None:
-    """Manifest digest from the ghcr registry (anonymous pull token)."""
-    name, _, tag = image.rpartition(":")
-    name = name.removeprefix("ghcr.io/")
+    """Manifest digest from ghcr.io or Docker Hub (anonymous pull token)."""
+    registry, name, tag = parse_image_ref(image)
+    if registry == "ghcr.io":
+        token_url = f"https://ghcr.io/token?service=ghcr.io&scope=repository:{name}:pull"
+        manifest_host = "ghcr.io"
+    elif registry == "docker.io":
+        token_url = (
+            "https://auth.docker.io/token?service=registry.docker.io"
+            f"&scope=repository:{name}:pull"
+        )
+        manifest_host = "registry-1.docker.io"
+    else:
+        return None
     try:
-        with urllib.request.urlopen(
-            f"https://ghcr.io/token?service=ghcr.io&scope=repository:{name}:pull",
-            timeout=_PROBE_TIMEOUT,
-        ) as response:
+        with urllib.request.urlopen(token_url, timeout=_PROBE_TIMEOUT) as response:
             token = json.load(response)["token"]
         request = urllib.request.Request(
-            f"https://ghcr.io/v2/{name}/manifests/{tag}",
+            f"https://{manifest_host}/v2/{name}/manifests/{tag}",
             method="HEAD",
             headers={
                 "Authorization": f"Bearer {token}",
@@ -262,18 +286,18 @@ def default_probes(project_dir: Path) -> Probes:
             "teddycloud", "curl", "-s", "http://localhost:80/api/getBoxes"
         ).stdout
 
-    def container_name() -> str:
+    def container_name(service: str) -> str:
         # Resolve the container name via compose ps — adopted installs may
         # not use the template's fixed container_name.
-        names = [svc.name for svc in compose.ps() if svc.service == "teddycloud"]
+        names = [svc.name for svc in compose.ps() if svc.service == service]
         if not names or not names[0]:
-            raise docker_cli.DockerError("no teddycloud container exists yet")
+            raise docker_cli.DockerError(f"no {service} container exists yet")
         return names[0]
 
-    def container_inspect(fmt: str) -> str:
+    def container_inspect(fmt: str, service: str = "teddycloud") -> str:
         try:
             result = subprocess.run(
-                ["docker", "container", "inspect", "--format", fmt, container_name()],
+                ["docker", "container", "inspect", "--format", fmt, container_name(service)],
                 capture_output=True,
                 text=True,
             )
@@ -292,9 +316,9 @@ def default_probes(project_dir: Path) -> Probes:
             raise docker_cli.DockerError(f"Unparseable inspect output: {exc}") from exc
         return {m["Destination"]: m.get("Source", "") for m in mounts}
 
-    def running_image_id() -> str | None:
+    def running_image_id(service: str) -> str | None:
         try:
-            return container_inspect("{{.Image}}") or None
+            return container_inspect("{{.Image}}", service) or None
         except docker_cli.DockerError:
             return None
 
@@ -637,7 +661,7 @@ def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
     # "Pulled but never applied": the running container was created from an
     # older image than what the local tag points at now. A plain `docker
     # compose restart` causes exactly this — it keeps the old image.
-    running_id = probes.running_image_id()
+    running_id = probes.running_image_id("teddycloud")
     local_id = probes.local_image_id(image)
     if running_id and local_id and running_id != local_id:
         return CheckResult(
@@ -664,6 +688,61 @@ def check_image_freshness(state: AppState, probes: Probes) -> CheckResult:
         name,
         "ok",
         f"Running the newest {state.teddycloud_image_tag!r} image." + version_note,
+    )
+
+
+CERTBOT_IMAGE = "certbot/certbot"
+
+
+def check_proxy_images(state: AppState, probes: Probes) -> CheckResult:
+    """Are nginx (and certbot) running the newest image of their tag?
+
+    Both use floating tags, so security fixes only arrive with a pull —
+    nginx terminates the WebUI TLS (incl. client-cert auth), so a stale
+    image means unpatched CVEs on an internet-facing port."""
+    name = "Proxy image freshness"
+    images = {"nginx": docker_cli.NGINX_IMAGE}
+    if state.letsencrypt_enabled:
+        images["certbot"] = CERTBOT_IMAGE
+    stale, not_applied, unknown = [], [], []
+    for service, image in images.items():
+        local = probes.local_image_digest(image)
+        if local is None:
+            unknown.append(image)
+            continue
+        running_id = probes.running_image_id(service)
+        local_id = probes.local_image_id(image)
+        if running_id and local_id and running_id != local_id:
+            not_applied.append(service)
+            continue
+        remote = probes.remote_image_digest(image)
+        if remote is None:
+            unknown.append(image)
+        elif local != remote:
+            stale.append(image)
+    problems = []
+    if stale:
+        problems.append(f"Newer image available for {', '.join(stale)}")
+    if not_applied:
+        problems.append(
+            f"{', '.join(not_applied)} still runs the previously pulled image"
+        )
+    if problems:
+        return CheckResult(
+            name,
+            "warn",
+            "; ".join(problems) + " — may lack security fixes; "
+            "use 'Pull latest images' in the Docker menu.",
+        )
+    if unknown:
+        return CheckResult(
+            name,
+            "warn",
+            f"Could not determine freshness of {', '.join(unknown)} "
+            "(never pulled, or registry unreachable).",
+        )
+    return CheckResult(
+        name, "ok", f"Running the newest {', '.join(images.values())} image(s)."
     )
 
 
@@ -831,6 +910,8 @@ def run_checks(
         check_boxes(probes),
         check_image_freshness(state, probes),
     ]
+    if state.deployment_mode == "nginx":
+        results.append(check_proxy_images(state, probes))
     if state.webui_tls_mode == "letsencrypt":
         results.append(check_letsencrypt(project_dir, state, probes))
     results.append(check_backup(project_dir))

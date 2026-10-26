@@ -127,6 +127,11 @@ http {
         ssl_certificate     /etc/teddycloudhelper/webui-pki/server/server.crt;
         ssl_certificate_key /etc/teddycloudhelper/webui-pki/server/server.key;
 {%- endif %}
+        # Hardening: nginx defaults to session tickets, a recurring source of
+        # resumption bugs (CVE-2025-23419, CVE-2026-97629) — and with client
+        # certs, a resumed session skips the certificate check. A full
+        # handshake per new connection is negligible for a single-user WebUI.
+        ssl_session_tickets off;
 {%- if webui_client_cert_auth %}
         ssl_client_certificate /etc/teddycloudhelper/webui-pki/ca/ca.crt;
         ssl_crl                /etc/teddycloudhelper/webui-pki/crl/ca.crl;

@@ -234,6 +234,14 @@ def test_nginx_streams_request_bodies():
         assert "proxy_request_buffering off;" in text
 
 
+def test_nginx_disables_tls_session_tickets():
+    # Hardening against ticket-based resumption bugs (CVE-2026-97629): with
+    # client-cert auth a resumed session skips the certificate check.
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        assert "ssl_session_tickets off;" in text
+
+
 def test_nginx_client_cert_auth_off_by_default():
     text = render.render_template("nginx.conf.j2", NGINX_SEPARATE)
     assert "ssl_verify_client" not in text

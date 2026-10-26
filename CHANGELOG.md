@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.20.0
+
+- nginx hardening: the WebUI server block now sets `ssl_session_tickets off;`
+  (nginx defaults to on). Ticket-based resumption has been the source of
+  several nginx CVEs (CVE-2025-23419, CVE-2026-97629), and with client-cert
+  auth a resumed session skips the certificate check. Takes effect after
+  "Re-render config files" in Project settings plus a restart.
+- New doctor check "Proxy image freshness" (nginx mode only): compares the
+  local `nginx:stable-alpine` image — and `certbot/certbot` when Let's
+  Encrypt is enabled — against Docker Hub, and detects "pulled but not
+  applied". These floating tags only get security fixes with a pull; until
+  now the doctor only watched the TeddyCloud image.
+- The registry digest probe now understands Docker Hub refs in addition to
+  ghcr.io (`doctor.parse_image_ref`).
+
 ## v0.19.0
 
 - Project settings can now switch a deployment from direct to nginx mode
