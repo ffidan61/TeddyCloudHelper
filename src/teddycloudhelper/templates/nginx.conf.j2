@@ -28,10 +28,11 @@ stream {
     # would otherwise leave nginx proxying to a dead IP until a restart.
     map $ssl_preread_server_name $upstream_443 {
 {%- if webui_port_mode == "shared" %}
-        # SNI split: the WebUI hostname is terminated locally (loopback
-        # server below); everything else — including boxes, which send no
-        # SNI at all — is passed through untouched to TeddyCloud.
-        {{ webui_hostname }} 127.0.0.1:8444;
+        # SNI split: the WebUI hostname is terminated locally (via the
+        # PROXY-protocol hop below); everything else — including boxes,
+        # which send no SNI at all — is passed through untouched to
+        # TeddyCloud.
+        {{ webui_hostname }} 127.0.0.1:8445;
 {%- endif %}
         default teddycloud:443;
     }
@@ -42,6 +43,20 @@ stream {
         resolver 127.0.0.11 valid=30s;
         proxy_pass $upstream_443;
     }
+{%- if webui_port_mode == "shared" %}
+
+    # WebUI branch only: hand the real client IP to the http block via the
+    # PROXY protocol — without this hop every WebUI request arrives from
+    # 127.0.0.1 and IP rules (allowlist, satisfy any) cannot work.
+    # proxy_protocol is per stream server, so it needs its own server:
+    # on the 443 server it would also hit TeddyCloud, which does not speak
+    # it, and break the box path.
+    server {
+        listen 127.0.0.1:8445;
+        proxy_protocol on;
+        proxy_pass 127.0.0.1:8444;
+    }
+{%- endif %}
 }
 
 http {
@@ -104,7 +119,10 @@ http {
     # TLS-terminated WebUI.
     server {
 {%- if webui_port_mode == "shared" %}
-        listen 127.0.0.1:8444 ssl;
+        listen 127.0.0.1:8444 ssl proxy_protocol;
+        # Only our own stream hop (above) may set the client address.
+        set_real_ip_from 127.0.0.1;
+        real_ip_header   proxy_protocol;
 {%- else %}
         listen {{ webui_port }} ssl;
 {%- endif %}

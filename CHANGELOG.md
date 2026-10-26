@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.21.1
+
+- Fixed: in shared-443 mode nginx saw every WebUI request as coming from
+  `127.0.0.1` — the 443 stream proxy handed WebUI connections to the
+  loopback TLS listener and the client address got lost. The IP allowlist
+  and "allowed IPs skip Basic Auth" (`satisfy any`) therefore did not work
+  in shared mode, and the access log showed no real client IPs. The WebUI
+  branch now goes through an internal stream hop (`127.0.0.1:8445`) that
+  adds the PROXY protocol; the TLS listener reads it
+  (`real_ip_header proxy_protocol`, trusted from loopback only). The box
+  path stays plain passthrough — TeddyCloud does not speak the PROXY
+  protocol. Separate-port mode is unchanged. Run "Re-render config files"
+  in Project settings and restart to apply.
+
 ## v0.21.0
 
 Security fixes from a review of the tool. **After updating, run "Re-render

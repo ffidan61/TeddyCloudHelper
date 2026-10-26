@@ -1,6 +1,6 @@
 # TODO — Kandidaten
 
-Stand: 2026-10-26, v0.20.0. Offene Punkte oben, erledigte unten zur Historie.
+Stand: 2026-10-26, v0.21.1. Offene Punkte oben, erledigte unten zur Historie.
 Jeder offene Punkt ist so beschrieben, dass ein Entwickler oder eine andere KI
 ihn ohne Rückfrage umsetzen kann (betroffene Dateien, Ist-Zustand, Soll-Zustand).
 
@@ -212,6 +212,91 @@ Args-Liste; Exit-Code ≠ 0 → Fehler-Panel, Menü läuft weiter.
 
 ---
 
+### 4. Offen aus dem IP-Fix (v0.21.1): Folgepunkte
+
+- Separate-Port-Modus: Docker erhält bei IPv4 die Quell-IP (iptables-DNAT).
+  Bei IPv6 über den userland-proxy (`docker-proxy`) kommt dagegen die
+  Gateway-IP an → IP-Regeln greifen bei IPv6-Clients nicht. Dokumentieren,
+  ggf. Doctor-Hinweis, wenn der WebUI-Hostname einen AAAA-Record hat.
+- Der Doctor prüft die WebUI von localhost bzw. aus dem Docker-Netz — seine
+  Probe ist nie eine "echte" Client-IP. Bei aktiver Allowlist bzw. künftigem
+  Home-Modus bekommt er 403 und muss das als ok werten
+  (`doctor.py::check_webui`, heute nur 400/401 behandelt).
+
+---
+
+### 5. Mögliches Feature: Zugangsmodus "Home" / "Reise" für die WebUI
+
+**Idee (mit dem User abgestimmt 2026-10-26):**
+- **Home:** Heim-IPs kommen OHNE Zertifikat rein, ALLE anderen IPs sind
+  komplett gesperrt (403) — auch mit gültigem Zertifikat. Zuhause ist die
+  WebUI damit faktisch nicht aus dem Internet erreichbar.
+- **Reise:** alle IPs mit gültigem Zertifikat; Heim-IPs behalten den Bypass
+  (Familie zuhause kann weiter ohne Zertifikat).
+- Heim-IP ist **dynamisch** → DynDNS-Hostname, regelmäßig aufgelöst.
+- Umschalten per **Menüpunkt**; Reisemodus mit **Ablaufdatum**, fällt per
+  Cron automatisch auf Home zurück.
+
+**Voraussetzung:** echte Client-IP im shared-Modus — erledigt in v0.21.1;
+der Doctor-Punkt aus A4 muss mit umgesetzt werden.
+
+**Skizze:**
+- *State* (`state.py`, Felder mit Defaults, keine Migration nötig):
+  `access_mode` (`"off"`/`"home"`/`"travel"`), `home_hostname`,
+  `home_networks: list[str]` (statische Zusatz-Netze), `travel_until`
+  (ISO-UTC). Aufgelöste IPs sind abgeleitet → NICHT in den State, sondern in
+  die generierte Datei `nginx/home-networks.conf` (dient zugleich als
+  "last known good").
+- *Neues Modul `access.py`* (Logik ohne UI): `resolve_home()` (nur A-Records,
+  injizierbarer Resolver), `render_home_networks()` (schreibt nur bei
+  Änderung; in place, weil einzeln bind-gemountet; bei DNS-Fehler Datei NICHT
+  anfassen), `travel_expired()`, `maintain()` (Cron-Job: DynDNS neu auflösen,
+  abgelaufene Reise → Home), `reload_nginx()` (`nginx_config_test`, dann
+  `Compose.exec_service("nginx", "nginx", "-s", "reload")` — kein
+  Container-Neustart, Box merkt nichts).
+- *nginx-Template* (nur bei `access_mode != "off"`, setzt Client-Certs voraus):
+  ```nginx
+  geo $tch_home { default 0; include /etc/nginx/home-networks.conf; }
+  map $ssl_client_verify $tch_cert_ok { SUCCESS 1; default 0; }
+  map "$tch_home$tch_cert_ok" $tch_allow {   # bewusst ohne Regex (CVE-2026-42533)
+      "10" 1; "11" 1;                          # Heim-IP: immer
+      "01" {{ 1 if travel else 0 }};           # Fremd + Zertifikat: nur Reise
+      default 0;
+  }
+  ```
+  Im WebUI-Server: `ssl_verify_client optional;` statt `on` (Heimgeräte ohne
+  Zertifikat kommen durch den Handshake; widerrufene Zertifikate → weiterhin
+  400 über die CRL) und `if ($tch_allow = 0) { return 403; }`. Basic Auth
+  bleibt unabhängig aktiv.
+- *Compose:* Mount `./nginx/home-networks.conf:/etc/nginx/home-networks.conf:ro`;
+  `render_project` legt die Datei immer an (sonst erzeugt Docker einen
+  Ordner). Gleicher Mount in `docker_cli.nginx_config_test`.
+- *Bestehende Allowlist:* schließt sich mit dem Zugangsmodus aus — beim
+  Einschalten Einträge nach Bestätigung nach `home_networks` übernehmen,
+  `ip_bypasses_basic_auth` zurücksetzen; `_add_ip` lehnt dann ab.
+- *Menü* (`menus/security.py`): "Access mode (home / travel)" — Einrichten
+  (DynDNS-Name, Test-Auflösung anzeigen), "Switch to TRAVEL" (Dauer, Default
+  14 Tage), "Switch to HOME" (Warnung: von unterwegs sperrst du dich aus),
+  statische Netze verwalten. Beim Einrichten fertige Cron-Zeile anzeigen:
+  `*/5 * * * * /pfad/teddycloudhelper --maintain --project /proj`.
+  Banner zeigt "Access mode: HOME" / "TRAVEL until …"; interaktiver Start
+  prüft das Ablaufdatum als Sicherheitsnetz.
+- *Headless:* `--maintain` (Muster `_headless_doctor` in `cli.py`), Exit ≠ 0
+  bei Fehlern.
+- *Doctor:* 403 als ok werten (siehe A4); neuer Check "Access mode": Reise
+  abgelaufen aber aktiv / DynDNS nicht auflösbar / aufgelöste IP ≠ Datei
+  (→ Cron läuft nicht) / WebUI-Hostname mit AAAA-Record.
+
+**Einschränkung IPv6:** DynDNS-AAAA ist nur die Router-Adresse, Heimgeräte
+nutzen eigene IPv6-Adressen → im Home-Modus gesperrt, wenn der
+WebUI-Hostname einen AAAA-Record hat. Version 1 daher nur IPv4 (+ Doctor-Warnung).
+
+**Verifikation auf Prod:** Home → Handy im Mobilfunk 403, Heim-WLAN ohne
+Zertifikat ok; Reise (1 Tag) → Mobilfunk mit Zertifikat ok, nach Ablauf +
+`--maintain` wieder 403; Box-Neustart bootet unverändert.
+
+---
+
 ## B — Testen auf dem Prod-Server (keine Implementierung, nur Durchführung)
 
 - [ ] Docker-Integrationstests einmal laufen lassen:
@@ -247,6 +332,19 @@ Bind-Mount überflüssig, nur Komfort-Menüpunkt siehe A2), Extended-Mode
 ---
 
 ## Erledigt (Historie)
+
+- ✅ **v0.21.1 — Echte Client-IP im shared-443-Modus** (ursprünglich A4,
+  gefunden 2026-10-26): Der Stream-Proxy reichte WebUI-Verbindungen an
+  `127.0.0.1:8444` weiter, nginx sah dadurch nur `127.0.0.1` → IP-Allowlist
+  und `satisfy any` waren im shared-Modus wirkungslos. Fix: WebUI-SNI →
+  Stream-Hop `127.0.0.1:8445` mit `proxy_protocol on` → HTTP-Listener
+  `8444 ssl proxy_protocol` + `real_ip_header proxy_protocol`
+  (`set_real_ip_from 127.0.0.1`). Box-Pfad bleibt ohne PROXY-Header.
+- ✅ **v0.21.0 — Security-Review**: Port 80 nur noch `= /v1/time`; nginx
+  mountet nur `webui-pki/server`, `ca/ca.crt`, `crl`; Keys/.p12/Backups 0600;
+  Einmal-Link atomar; Hostname-Validierung.
+- ✅ **v0.20.0** — `ssl_session_tickets off`, Doctor-Check
+  "Proxy image freshness" (nginx/certbot gegen Docker Hub).
 
 - ✅ **v0.19.0 — Settings: "direct → nginx" ohne vollen Wizard**
   (ursprünglich Punkt A1): `menus/settings.py::_mode()` ruft für den

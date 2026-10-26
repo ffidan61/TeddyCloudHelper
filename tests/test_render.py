@@ -165,9 +165,34 @@ def test_nginx_shared_uses_sni_split():
     text = render.render_template("nginx.conf.j2", NGINX_SHARED)
     assert "ssl_preread on;" in text
     assert "map $ssl_preread_server_name" in text
-    assert "tc.example.com 127.0.0.1:8444;" in text
+    assert "tc.example.com 127.0.0.1:8445;" in text
     assert "default teddycloud:443;" in text
-    assert "listen 127.0.0.1:8444 ssl;" in text
+    assert "listen 127.0.0.1:8444 ssl proxy_protocol;" in text
+
+
+def test_nginx_shared_passes_real_client_ip():
+    # Without the PROXY-protocol hop every WebUI request arrives from
+    # 127.0.0.1 — IP allowlist and `satisfy any` cannot work (found
+    # 2026-10-26). The hop must carry the header to the http block, and
+    # only loopback may set it.
+    text = render.render_template("nginx.conf.j2", NGINX_SHARED)
+    stream = text.split("stream {", 1)[1].split("\nhttp {", 1)[0]
+    hop = stream.split("listen 127.0.0.1:8445;", 1)[1].split("}", 1)[0]
+    assert "proxy_protocol on;" in hop
+    assert "proxy_pass 127.0.0.1:8444;" in hop
+    assert "set_real_ip_from 127.0.0.1;" in text
+    assert "real_ip_header   proxy_protocol;" in text
+
+
+def test_nginx_shared_box_path_gets_no_proxy_protocol():
+    # TeddyCloud does not speak the PROXY protocol — the box path (the
+    # 443 server and its default branch) must stay plain passthrough.
+    text = render.render_template("nginx.conf.j2", NGINX_SHARED)
+    stream = text.split("stream {", 1)[1].split("\nhttp {", 1)[0]
+    server_443 = stream.split("listen 443;", 1)[1].split("}", 1)[0]
+    assert "proxy_protocol" not in server_443
+    assert stream.count("proxy_protocol on;") == 1
+    assert "8444" not in stream.split("map $ssl_preread_server_name", 1)[1].split("}", 1)[0]
 
 
 def test_nginx_separate_passes_443_through():
@@ -175,6 +200,9 @@ def test_nginx_separate_passes_443_through():
     # The map only has the default entry — all of 443 belongs to the box.
     assert "default teddycloud:443;" in text
     assert "127.0.0.1:8444" not in text
+    assert "127.0.0.1:8445" not in text
+    assert "proxy_protocol" not in text
+    assert "real_ip_header" not in text
     assert "listen 8443 ssl;" in text
 
 
