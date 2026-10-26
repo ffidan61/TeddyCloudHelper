@@ -212,7 +212,7 @@ Args-Liste; Exit-Code ≠ 0 → Fehler-Panel, Menü läuft weiter.
 
 ---
 
-### 4. Offen aus dem IP-Fix (v0.21.1): Folgepunkte
+### 4. Offen aus dem IP-Fix (v0.21.2): Folgepunkte
 
 - Separate-Port-Modus: Docker erhält bei IPv4 die Quell-IP (iptables-DNAT).
   Bei IPv6 über den userland-proxy (`docker-proxy`) kommt dagegen die
@@ -225,7 +225,74 @@ Args-Liste; Exit-Code ≠ 0 → Fehler-Panel, Menü läuft weiter.
 
 ---
 
-### 5. Mögliches Feature: Zugangsmodus "Home" / "Reise" für die WebUI
+### 5. Mögliches Feature: DNS-Namen (DynDNS) in der IP-Allowlist
+
+**Idee (mit dem User besprochen 2026-10-26):** Die Allowlist akzeptiert
+zusätzlich Hostnamen wie `home.example.dyndns.org`. Grund: Bei dynamischer
+Heim-IP (z. B. Zwangstrennung bei DSL) sperrt die Allowlist sonst nach jedem
+IP-Wechsel aus, bis die neue IP von Hand eingetragen ist.
+
+**Kernproblem:** nginx kann in `allow` keine Hostnamen — das Tool muss den
+Namen selbst auflösen und die IPs in die Config schreiben.
+
+**Skizze:**
+- *State* (`state.py`): neues Feld `ip_allowlist_hostnames: list[str]`
+  (getrennt von `ip_allowlist`, damit die bestehende IP-Validierung über
+  `security.normalize_allowlist_entry` unverändert bleibt). Validierung der
+  Namen über `server_certs.validate_webui_hostname`. Die aufgelösten IPs sind
+  abgeleitet → NICHT in den State.
+- *Generierte Include-Datei* `nginx/allowlist-dns.conf` mit `allow <ip>;`-
+  Zeilen, eingebunden im WebUI-Server VOR `deny all;`. Dient zugleich als
+  "last known good":
+  - schreibt nur bei Änderung (sonst unnötige Reloads/`.bak`s);
+  - in place schreiben (truncate statt rename), weil einzeln bind-gemountet —
+    ein Rename sieht der Container nicht;
+  - **schlägt die DNS-Auflösung fehl, Datei NICHT anfassen** — sonst sperrt
+    ein DNS-Hänger alle aus;
+  - `render_project` legt sie immer an (notfalls nur Kommentar), sonst erzeugt
+    Docker an ihrer Stelle einen Ordner.
+- *Compose:* Mount `./nginx/allowlist-dns.conf:/etc/nginx/allowlist-dns.conf:ro`;
+  gleicher Mount in `docker_cli.nginx_config_test` und im
+  Integrationstest-Helper.
+- *Neues Modul* (z. B. `access.py`, Logik ohne UI — wird von A6
+  wiederverwendet): `resolve_hostnames()` (nur A-Records, injizierbarer
+  Resolver als Test-Seam), `write_dns_allowlist()` (Rückgabe: geändert ja/nein),
+  `maintain(project)` (Cron-Job: neu auflösen, bei Änderung nginx neu laden),
+  `reload_nginx()` (`docker_cli.nginx_config_test`, dann
+  `Compose.exec_service("nginx", "nginx", "-s", "reload")` — kein
+  Container-Neustart, die Box merkt nichts).
+- *Headless:* `teddycloudhelper --maintain [--project P]` (Muster
+  `_headless_doctor` in `cli.py`), eine Zeile pro Aktion, Exit ≠ 0 bei Fehlern
+  (Cron schickt dann Mail). Ohne Hostnamen-Einträge: no-op.
+- *Menü* (`menus/security.py`): "Add an IP allowlist entry" akzeptiert IP,
+  Netz ODER Hostnamen; bei Hostnamen sofort testweise auflösen und die IPs
+  anzeigen; danach die fertige Cron-Zeile mit absolutem Pfad
+  (`shutil.which("teddycloudhelper")`) anzeigen:
+  `*/5 * * * * /pfad/teddycloudhelper --maintain --project /proj >/dev/null`.
+  "Show security status" zeigt Hostname → aktuelle IPs.
+- *Doctor:* neuer Check, nur wenn Hostnamen eingetragen sind: Name nicht
+  auflösbar → warn; aufgelöste IPs ≠ Inhalt von `allowlist-dns.conf` → warn
+  ("Cron läuft offenbar nicht"). Zusätzlich A4-Punkt: 403 der eigenen Probe
+  bei aktiver Allowlist als ok werten.
+
+**Bekannte Nebenwirkungen (in der UI erwähnen):**
+- Nach einem IP-Wechsel kurze Aussperrung bis zum nächsten Cron-Lauf +
+  DNS-TTL (typisch wenige Minuten).
+- Die alte IP bleibt solange erlaubt und könnte einem Fremden zugeteilt sein —
+  unkritisch, wenn zusätzlich Client-Zertifikate aktiv sind.
+- IPv6: DynDNS-AAAA ist meist nur die Router-Adresse, Geräte haben eigene
+  IPv6-Adressen → nur IPv4 zuverlässig.
+
+**Test:** `test_access.py` (Fake-Resolver: Änderung → schreibt + reload;
+gleiche IPs → kein Schreiben; DNS-Fehler → Datei unverändert),
+`test_render.py` (Include vor `deny all`), Laufzeittest in
+`test_docker_integration.py` analog `test_runtime_allowlist_sees_real_client_ip`
+(Include-Datei mit der Client-IP → 200, ohne → 403). Wie bei allen
+Proxy-Änderungen: erst über Branch + Draft-PR durch CI, dann mergen.
+
+---
+
+### 6. Mögliches Feature: Zugangsmodus "Home" / "Reise" für die WebUI
 
 **Idee (mit dem User abgestimmt 2026-10-26):**
 - **Home:** Heim-IPs kommen OHNE Zertifikat rein, ALLE anderen IPs sind
@@ -237,8 +304,9 @@ Args-Liste; Exit-Code ≠ 0 → Fehler-Panel, Menü läuft weiter.
 - Umschalten per **Menüpunkt**; Reisemodus mit **Ablaufdatum**, fällt per
   Cron automatisch auf Home zurück.
 
-**Voraussetzung:** echte Client-IP im shared-Modus — erledigt in v0.21.1;
-der Doctor-Punkt aus A4 muss mit umgesetzt werden.
+**Voraussetzung:** echte Client-IP im shared-Modus — erledigt in v0.21.2;
+der Doctor-Punkt aus A4 muss mit umgesetzt werden. Baut auf A5 auf
+(DynDNS-Auflösung, `--maintain`, `reload_nginx` — dort zuerst umsetzen).
 
 **Skizze:**
 - *State* (`state.py`, Felder mit Defaults, keine Migration nötig):
