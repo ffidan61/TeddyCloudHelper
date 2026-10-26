@@ -1,6 +1,6 @@
 # TODO — Kandidaten
 
-Stand: 2026-10-26, v0.21.1. Offene Punkte oben, erledigte unten zur Historie.
+Stand: 2026-10-26, v0.21.2. Offene Punkte oben, erledigte unten zur Historie.
 Jeder offene Punkt ist so beschrieben, dass ein Entwickler oder eine andere KI
 ihn ohne Rückfrage umsetzen kann (betroffene Dateien, Ist-Zustand, Soll-Zustand).
 
@@ -333,13 +333,18 @@ Bind-Mount überflüssig, nur Komfort-Menüpunkt siehe A2), Extended-Mode
 
 ## Erledigt (Historie)
 
-- ✅ **v0.21.1 — Echte Client-IP im shared-443-Modus** (ursprünglich A4,
+- ✅ **v0.21.2 — Echte Client-IP im shared-443-Modus** (ursprünglich A4,
   gefunden 2026-10-26): Der Stream-Proxy reichte WebUI-Verbindungen an
   `127.0.0.1:8444` weiter, nginx sah dadurch nur `127.0.0.1` → IP-Allowlist
-  und `satisfy any` waren im shared-Modus wirkungslos. Fix: WebUI-SNI →
-  Stream-Hop `127.0.0.1:8445` mit `proxy_protocol on` → HTTP-Listener
-  `8444 ssl proxy_protocol` + `real_ip_header proxy_protocol`
-  (`set_real_ip_from 127.0.0.1`). Box-Pfad bleibt ohne PROXY-Header.
+  und `satisfy any` waren im shared-Modus wirkungslos. Erster Fix in
+  v0.21.1 war FALSCH (PROXY-Header erst auf einem Loopback-Hop gesetzt →
+  meldet nur 127.0.0.1; auf Prod sperrte die Allowlist dadurch alle aus).
+  Richtig (v0.21.2): Der 443-Server selbst sendet `proxy_protocol on`;
+  WebUI-Listener `8444 ssl proxy_protocol` + `real_ip_header
+  proxy_protocol`; Box-Hop `127.0.0.1:8445` (`listen … proxy_protocol`,
+  ohne `proxy_protocol on`) entfernt den Header vor TeddyCloud.
+  Lehre: Proxy-/Netzwerk-Änderungen brauchen einen Laufzeittest, `nginx -t`
+  reicht nicht → `test_runtime_*` in `test_docker_integration.py`.
 - ✅ **v0.21.0 — Security-Review**: Port 80 nur noch `= /v1/time`; nginx
   mountet nur `webui-pki/server`, `ca/ca.crt`, `crl`; Keys/.p12/Backups 0600;
   Einmal-Link atomar; Hostname-Validierung.

@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.21.2
+
+- Fixed v0.21.1's real-IP fix, which did not work: it added the PROXY
+  header on an internal loopback hop, and that hop only ever reported
+  its own peer — `127.0.0.1`. With an IP allowlist in shared-443 mode
+  every client was therefore blocked (403). The PROXY header now comes
+  from the 443 server itself (the only place that knows the client
+  address); the box path goes through a small internal hop that strips
+  the header again, so TeddyCloud still gets the box's raw TLS stream.
+  Run "Re-render config files" in Project settings and restart.
+- New runtime integration tests (CI, Docker) start the rendered nginx
+  next to a fake TeddyCloud and fetch from clients with fixed IPs: the
+  allowlist allows/denies by the real client IP in shared and separate
+  mode, and the box path (no SNI) reaches TeddyCloud cleanly. `nginx -t`
+  alone could not catch the v0.21.1 mistake.
+
 ## v0.21.1
 
 - Fixed: in shared-443 mode nginx saw every WebUI request as coming from
