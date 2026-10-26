@@ -115,6 +115,13 @@ def _share_p12(project: Path) -> None:
     choices = [(f"{info.name} (serial {info.serial})", info.name) for info in infos]
     name = ui.menu("Send which certificate?", choices)
     info = next(i for i in infos if i.name == name)
+    if client_certs.p12_is_unprotected(info.p12_path) and not ui.confirm(
+        "This .p12 has NO password and the link is plain HTTP — anyone "
+        "sniffing the network gets the private key. Send it anyway? "
+        "(Safer: revoke and re-issue it with a password.)",
+        default=False,
+    ):
+        return
     host = ui.ask_text(
         "Address the phone should connect to (this machine's LAN IP):",
         default=share.lan_ip() or "",
@@ -182,8 +189,8 @@ def _revoke(project: Path) -> None:
 
 def _server_cert(project: Path) -> None:
     state = state_mod.load_state(project)
-    hostname = ui.ask_text(
-        "Hostname or IP the WebUI is reached at:", default=state.webui_hostname
+    hostname = server_certs.validate_webui_hostname(
+        ui.ask_text("Hostname or IP the WebUI is reached at:", default=state.webui_hostname)
     )
     path = server_certs.create_webui_server_cert(project, hostname)
     if hostname != state.webui_hostname:

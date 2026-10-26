@@ -17,6 +17,8 @@ import tarfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+from teddycloudhelper import fileperm
+
 # Top-level items included in (and accepted back from) a backup. All compose
 # filename variants are listed because adopted installs (docker menu) keep
 # whatever name they already had, not just the one the wizard renders.
@@ -52,6 +54,9 @@ def create_backup(project_dir: Path, dest_dir: Path | None = None) -> Path:
     dest_dir = dest_dir or default_backup_dir(project_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = _unique_path(dest_dir)
+    # The archive holds every private key of the project (WebUI CA, client
+    # certs, the dumped box certs) — create it owner-only before writing.
+    fileperm.write_private(path, b"")
     with tarfile.open(path, "w:gz") as tar:
         for item in items:
             tar.add(item, arcname=item.name)

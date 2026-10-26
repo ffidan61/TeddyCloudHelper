@@ -1,3 +1,5 @@
+import stat
+import sys
 import tarfile
 
 import pytest
@@ -117,3 +119,10 @@ def test_restore_garbage_archive(tmp_path):
     bad.write_text("this is not a tarball")
     with pytest.raises(backup.BackupError, match="not a readable"):
         backup.restore_backup(tmp_path, bad)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_backup_archive_is_owner_only(project):
+    # The archive holds every private key of the project.
+    path = backup.create_backup(project)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

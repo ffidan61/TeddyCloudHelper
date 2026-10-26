@@ -50,3 +50,40 @@ def test_reissue_declined_changes_nothing(project, monkeypatch):
 
     assert client_certs.list_client_certs(project)[0].serial == serial
     assert crl.revoked_serials(project) == []
+
+
+class ShareStarted(Exception):
+    """Raised by the fake OneTimeShare — the flow got as far as serving."""
+
+
+def _share_answers(monkeypatch, confirms):
+    answers = iter(confirms)
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "admin")
+    monkeypatch.setattr(ui, "confirm", lambda *a, **kw: next(answers))
+    created = []
+
+    def fake_share(*args, **kwargs):
+        created.append(args)
+        raise ShareStarted
+
+    monkeypatch.setattr(certs_menu.share, "OneTimeShare", fake_share)
+    return created
+
+
+def test_share_unprotected_p12_declined_serves_nothing(project, monkeypatch):
+    # A passwordless .p12 over plain HTTP is the private key in cleartext
+    # on the network — the default answer must be "no".
+    client_certs.issue_client_cert(project, "admin", serial=1, p12_password="")
+    created = _share_answers(monkeypatch, confirms=[False])
+    certs_menu._share_p12(project)
+    assert created == []
+
+
+def test_share_protected_p12_asks_no_extra_question(project, monkeypatch):
+    client_certs.issue_client_cert(project, "admin", serial=1, p12_password="pw")
+    created = _share_answers(monkeypatch, confirms=[])
+    monkeypatch.setattr(ui, "ask_text", lambda *a, **kw: "192.168.1.5")
+    monkeypatch.setattr(ui, "warn_panel", lambda *a, **kw: None)
+    with pytest.raises(ShareStarted):
+        certs_menu._share_p12(project)
+    assert len(created) == 1

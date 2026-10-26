@@ -17,7 +17,6 @@ that issuing and revoking never needs a passphrase prompt.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +24,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+
+from teddycloudhelper import fileperm
 
 PKI_DIRNAME = "webui-pki"
 DEFAULT_CA_CN = "TeddyCloudHelper WebUI CA"
@@ -59,17 +60,14 @@ def generate_key() -> ec.EllipticCurvePrivateKey:
 
 
 def write_key(path: Path, key: ec.EllipticCurvePrivateKey) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(
+    fileperm.write_private(
+        path,
         key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
-        )
+        ),
     )
-    # Best effort; meaningless on Windows.
-    with contextlib.suppress(OSError):
-        path.chmod(0o600)
 
 
 def write_cert(path: Path, cert: x509.Certificate) -> None:

@@ -136,10 +136,14 @@ def step_webui(state: AppState) -> None:
     """nginx mode only: hostname + how the WebUI is reached."""
     hostname = ""
     while not hostname:
-        hostname = ui.ask_text(
+        raw = ui.ask_text(
             "Hostname the WebUI is reached at (must differ from the box hostnames):",
             default=state.webui_hostname or "teddycloud.local",
-        ).strip()
+        )
+        try:
+            hostname = server_certs.validate_webui_hostname(raw)
+        except CertError as exc:
+            ui.error_panel(str(exc))
     state.webui_hostname = hostname
     state.webui_port_mode = ui.menu(
         "Where should the WebUI listen?",
@@ -400,8 +404,22 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
     """Render all config files for the chosen mode (existing files get a .bak)."""
     if state.deployment_mode == "nginx" and not state.webui_hostname:
         raise ValueError("nginx mode needs a WebUI hostname — run the setup wizard.")
+    if state.webui_hostname:
+        # Goes verbatim into nginx.conf — re-check here so a hand-edited
+        # state file or a restored backup cannot inject directives.
+        server_certs.validate_webui_hostname(state.webui_hostname)
     for name in DATA_DIRS:
         (project_dir / name).mkdir(parents=True, exist_ok=True)
+    if state.deployment_mode == "nginx":
+        # nginx bind-mounts single PKI subpaths (see docker-compose.yml.j2);
+        # a missing source would be created by docker as a root-owned dir.
+        for sub in ("server", "crl"):
+            (ca.pki_dir(project_dir) / sub).mkdir(parents=True, exist_ok=True)
+        if state.webui_client_cert_auth and not ca.ca_exists(project_dir):
+            raise ValueError(
+                "Client-certificate auth is on but the WebUI CA is missing — "
+                "re-enable it in the security menu to recreate the CA."
+            )
     context = {
         "deployment_mode": state.deployment_mode,
         "teddycloud_image_tag": state.teddycloud_image_tag,

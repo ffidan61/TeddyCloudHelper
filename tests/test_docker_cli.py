@@ -247,3 +247,25 @@ def test_nginx_config_test_returns_none_when_docker_unavailable(tmp_path):
         raise docker_cli.DockerError("Could not run 'docker'")
 
     assert docker_cli.nginx_config_test(tmp_path, runner=boom) is None
+
+
+def test_nginx_config_test_never_mounts_the_ca_key(tmp_path):
+    # Mirrors the compose mounts: server/, ca/ca.crt, crl/ — not the PKI root.
+    _nginx_project(tmp_path)
+    pki = tmp_path / "webui-pki"
+    for sub in ("server", "ca", "crl", "clients"):
+        (pki / sub).mkdir()
+    (pki / "ca" / "ca.crt").write_text("pem")
+    (pki / "ca" / "ca.key").write_text("secret")
+    runner = FakeRunner(completed(returncode=0))
+
+    docker_cli.nginx_config_test(tmp_path, runner=runner)
+
+    args, _ = runner.calls[0]
+    mounts = [a for a in args if "webui-pki" in a]
+    target = "/etc/teddycloudhelper/webui-pki"
+    assert mounts == [
+        f"{pki / 'server'}:{target}/server:ro",
+        f"{pki / 'ca/ca.crt'}:{target}/ca/ca.crt:ro",
+        f"{pki / 'crl'}:{target}/crl:ro",
+    ]

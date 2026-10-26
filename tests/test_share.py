@@ -57,6 +57,30 @@ def test_share_rejects_wrong_token_and_keeps_waiting(p12):
     assert outcome == [True]
 
 
+def test_share_concurrent_requests_get_the_file_at_most_once(p12):
+    # The server is threaded: without an atomic claim, simultaneous
+    # requests could all pass the "not yet downloaded" check.
+    one = share.OneTimeShare(p12, "127.0.0.1", timeout=10)
+    thread, outcome = serve_in_thread(one)
+    results: list = []
+
+    def fetch():
+        try:
+            with urllib.request.urlopen(one.url, timeout=5) as response:
+                results.append(response.read())
+        except (urllib.error.URLError, ConnectionError):
+            results.append(None)
+
+    fetchers = [threading.Thread(target=fetch) for _ in range(5)]
+    for fetcher in fetchers:
+        fetcher.start()
+    for fetcher in fetchers:
+        fetcher.join(timeout=10)
+    thread.join(timeout=10)
+    assert results.count(p12.read_bytes()) == 1
+    assert outcome == [True]
+
+
 def test_share_expires_without_a_download(p12):
     one = share.OneTimeShare(p12, "127.0.0.1", timeout=0.2)
     assert one.serve_until_downloaded() is False

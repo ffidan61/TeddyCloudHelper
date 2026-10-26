@@ -21,6 +21,8 @@ from urllib.parse import quote
 import qrcode
 
 SHARE_TIMEOUT_SECONDS = 300.0
+# How long a started download may take (a .p12 is a few KB).
+_TRANSFER_GRACE_SECONDS = 30.0
 
 
 def lan_ip() -> str | None:
@@ -61,23 +63,38 @@ class OneTimeShare:
         data = file_path.read_bytes()
         url_path = f"/{secrets.token_urlsafe(16)}/{quote(file_path.name)}"
         self._timeout = timeout
+        # "claimed" is taken atomically by the first valid request — the
+        # server is threaded, so check-then-set without the lock would let
+        # two simultaneous requests both get the key. "downloaded" is only
+        # set once the bytes were actually written; "finished" either way.
+        self._claimed = threading.Event()
         self._downloaded = threading.Event()
-        downloaded = self._downloaded
+        self._finished = threading.Event()
+        claimed, downloaded, finished = self._claimed, self._downloaded, self._finished
+        claim_lock = threading.Lock()
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802 - http.server API
-                if self.path != url_path or downloaded.is_set():
+                with claim_lock:
+                    valid = self.path == url_path and not claimed.is_set()
+                    if valid:
+                        claimed.set()
+                if not valid:
                     self.send_error(404)
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "application/x-pkcs12")
-                self.send_header(
-                    "Content-Disposition", f'attachment; filename="{file_path.name}"'
-                )
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                downloaded.set()
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-pkcs12")
+                    self.send_header(
+                        "Content-Disposition",
+                        f'attachment; filename="{file_path.name}"',
+                    )
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    downloaded.set()
+                finally:
+                    finished.set()
 
             def log_message(self, *args) -> None:  # keep the terminal clean
                 pass
@@ -91,12 +108,17 @@ class OneTimeShare:
         """Block until the file was fetched (True) or the window expired.
 
         Always tears the server down afterwards — the link is dead either
-        way, including on Ctrl-C.
+        way, including on Ctrl-C. A claimed but aborted transfer also kills
+        the link (False): the token was used, a retry needs a new one.
         """
         deadline = time.monotonic() + self._timeout
         try:
-            while not self._downloaded.is_set() and time.monotonic() < deadline:
+            while not self._claimed.is_set() and time.monotonic() < deadline:
                 self._server.handle_request()
+            if self._claimed.is_set():
+                # Request threads are daemons — server_close() does not wait
+                # for them, so let an in-flight transfer finish first.
+                self._finished.wait(_TRANSFER_GRACE_SECONDS)
         finally:
             self._server.server_close()
         return self._downloaded.is_set()

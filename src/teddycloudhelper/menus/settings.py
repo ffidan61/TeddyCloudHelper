@@ -63,8 +63,12 @@ def _apply(state: AppState, project: Path) -> None:
 
 
 def _hostname(state: AppState, project: Path) -> None:
-    new = ui.ask_text("WebUI hostname:", default=state.webui_hostname).strip()
-    if not new or new == state.webui_hostname:
+    raw = ui.ask_text("WebUI hostname:", default=state.webui_hostname).strip()
+    if not raw or raw == state.webui_hostname:
+        ui.info_panel("Hostname unchanged — nothing to do.")
+        return
+    new = server_certs.validate_webui_hostname(raw)
+    if new == state.webui_hostname:
         ui.info_panel("Hostname unchanged — nothing to do.")
         return
     state.webui_hostname = new

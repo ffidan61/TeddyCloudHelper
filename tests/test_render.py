@@ -142,7 +142,7 @@ def test_compose_direct_publishes_teddycloud_ports():
 def test_compose_nginx_moves_ports_to_nginx():
     text = render.render_template("docker-compose.yml.j2", NGINX_SEPARATE)
     assert "nginx:stable-alpine" in text
-    assert "./webui-pki:/etc/teddycloudhelper/webui-pki:ro" in text
+    assert "./webui-pki/server:/etc/teddycloudhelper/webui-pki/server:ro" in text
     # teddycloud service publishes nothing; ports appear only under nginx
     teddycloud_part = text.split("nginx:")[0]
     assert "ports:" not in teddycloud_part
@@ -339,7 +339,7 @@ def test_nginx_port80_never_reaches_teddycloud():
     assert "return 301 https://$host:8443$request_uri;" in port80
     # Only the box API may be proxied on port 80 — never the web GUI.
     assert port80.count("proxy_pass") == 1
-    assert "location /v1/" in port80
+    assert "location = /v1/time" in port80
 
 
 def test_nginx_port80_serves_box_time_endpoint():
@@ -349,8 +349,42 @@ def test_nginx_port80_serves_box_time_endpoint():
     for context in (NGINX_SEPARATE, NGINX_SHARED):
         text = render.render_template("nginx.conf.j2", context)
         port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
-        assert "location /v1/" in port80
+        assert "location = /v1/time" in port80
         assert "proxy_pass $teddycloud_http;" in port80
+
+
+def test_nginx_port80_exposes_no_other_box_api_route():
+    # TeddyCloud serves ALL box-API routes (/v1/content, /v1/claim,
+    # /v1/cloud-reset, ...) on its plain-HTTP port without a client-cert
+    # check — only the exact time endpoint may be proxied from the internet.
+    for context in (NGINX_SEPARATE, NGINX_SHARED):
+        text = render.render_template("nginx.conf.j2", context)
+        port80 = text.split("listen 80;", 1)[1].split("server {", 1)[0]
+        assert "location /v1/" not in port80
+        assert "location /v" not in port80
+
+
+def test_compose_nginx_never_mounts_pki_private_keys():
+    # A compromised nginx must not reach the CA key, client keys or .p12s.
+    for context in (
+        NGINX_SEPARATE,
+        NGINX_SHARED | {"webui_client_cert_auth": True},
+    ):
+        text = render.render_template("docker-compose.yml.j2", context)
+        assert "./webui-pki:" not in text
+        assert "./webui-pki/ca:" not in text
+        assert "./webui-pki/clients" not in text
+
+
+def test_compose_nginx_mounts_ca_cert_and_crl_only_with_client_certs():
+    off = render.render_template("docker-compose.yml.j2", NGINX_SEPARATE)
+    assert "webui-pki/ca/ca.crt" not in off
+    assert "webui-pki/crl" not in off
+    on = render.render_template(
+        "docker-compose.yml.j2", NGINX_SEPARATE | {"webui_client_cert_auth": True}
+    )
+    assert "./webui-pki/ca/ca.crt:/etc/teddycloudhelper/webui-pki/ca/ca.crt:ro" in on
+    assert "./webui-pki/crl:/etc/teddycloudhelper/webui-pki/crl:ro" in on
 
 
 def test_nginx_port80_redirect_targets_webui_port():

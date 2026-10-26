@@ -83,3 +83,40 @@ def test_export_box_ca_invalid_der(tmp_path):
     path.write_text("garbage")
     with pytest.raises(server_certs.CertError, match="not a valid DER"):
         server_certs.export_box_ca(tmp_path, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("tc.example.com", "tc.example.com"),
+        ("  TC.Example.COM. ", "tc.example.com"),
+        ("teddycloud", "teddycloud"),
+        ("192.168.1.10", "192.168.1.10"),
+        ("::1", "::1"),
+    ],
+)
+def test_validate_webui_hostname_accepts(raw, expected):
+    assert server_certs.validate_webui_hostname(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "tc.example.com; return 200",  # nginx directive injection
+        "tc.example.com\nlisten 1234",
+        "../../etc",  # Let's Encrypt live/<hostname> path
+        "a b.example.com",
+        "-tc.example.com",
+        "tc..example.com",
+        "*.example.com",
+        "a" * 64 + ".example.com",  # label too long
+    ],
+)
+def test_validate_webui_hostname_rejects(raw):
+    with pytest.raises(server_certs.CertError):
+        server_certs.validate_webui_hostname(raw)
+
+
+def test_webui_cert_rejects_invalid_hostname(tmp_path):
+    with pytest.raises(server_certs.CertError, match="not a valid hostname"):
+        server_certs.create_webui_server_cert(tmp_path, "x; include /etc/passwd")

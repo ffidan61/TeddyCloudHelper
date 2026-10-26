@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.21.0
+
+Security fixes from a review of the tool. **After updating, run "Re-render
+config files" in Project settings and restart** — items 1 and 2 live in the
+templates.
+
+1. **Port 80 no longer exposes TeddyCloud's box API.** nginx proxied all of
+   `/v1/` over plain HTTP, and TeddyCloud answers every box-API route
+   (`/v1/content`, `/v1/claim`, `/v1/cloud-reset`, ...) on its HTTP port
+   without a client-cert check — reachable from the internet. Port 80 now
+   proxies only the exact `/v1/time` endpoint the box needs before its
+   first TLS handshake.
+2. **nginx no longer sees the WebUI CA key.** The whole `webui-pki/` (CA
+   key, client keys, `.p12` bundles) was mounted into the internet-facing
+   nginx container; a compromised nginx could have minted client
+   certificates. It now gets only `server/`, plus `ca/ca.crt` and `crl/`
+   when client-cert auth is on. The `nginx -t` pre-check mounts the same.
+3. **`.p12` bundles are owner-only (0600)**, created that way from the start
+   (keys and the CA key too — no more write-then-chmod window). Sending a
+   passwordless `.p12` via the plain-HTTP one-time link now asks first,
+   defaulting to "no".
+4. **Backups are owner-only (0600)** — they contain every private key of
+   the project.
+5. **The one-time download link is now strictly single-use** even under
+   simultaneous requests (atomic claim instead of check-then-set).
+6. **The WebUI hostname is validated** (DNS name or IP only) in the wizard,
+   Project settings and the certificate menu, and re-checked on every
+   render — a hand-edited state file or a restored backup can no longer
+   inject nginx directives or path segments.
+
+Also: client-cert names with a trailing newline are rejected (`fullmatch`).
+
 ## v0.20.0
 
 - nginx hardening: the WebUI server block now sets `ssl_session_tickets off;`

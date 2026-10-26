@@ -618,3 +618,42 @@ def test_check_nginx_infra_error_warns_but_proceeds(tmp_path, monkeypatch):
     wizard.check_nginx_before_restart(tmp_path)  # no raise
 
     assert warnings and "Could not validate" in warnings[0]
+
+
+def test_step_webui_reprompts_on_invalid_hostname(monkeypatch):
+    state = AppState()
+    answer_text(monkeypatch, "tc.example.com; return 200", "TC.Example.com", "9443")
+    errors = []
+    monkeypatch.setattr(ui, "error_panel", lambda msg, **kw: errors.append(msg))
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "separate")
+    wizard.step_webui(state)
+    assert state.webui_hostname == "tc.example.com"
+    assert len(errors) == 1
+
+
+def test_render_project_rejects_tampered_hostname(tmp_path):
+    # A hand-edited state file or a restored backup must not inject
+    # directives into nginx.conf.
+    state = AppState(deployment_mode="nginx", webui_hostname="x.example.com; return 200")
+    with pytest.raises(server_certs.CertError):
+        wizard.render_project(state, tmp_path)
+    assert not (tmp_path / "nginx" / "nginx.conf").exists()
+
+
+def test_render_project_nginx_creates_pki_mount_sources(tmp_path):
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+    wizard.render_project(state, tmp_path)
+    assert (ca.pki_dir(tmp_path) / "server").is_dir()
+    assert (ca.pki_dir(tmp_path) / "crl").is_dir()
+
+
+def test_render_project_client_certs_without_ca_raises(tmp_path):
+    # ca.crt is a single-file bind mount — a missing source would make
+    # docker create a root-owned directory in its place.
+    state = AppState(
+        deployment_mode="nginx",
+        webui_hostname="tc.example.com",
+        webui_client_cert_auth=True,
+    )
+    with pytest.raises(ValueError, match="CA is missing"):
+        wizard.render_project(state, tmp_path)

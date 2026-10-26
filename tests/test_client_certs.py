@@ -1,3 +1,6 @@
+import stat
+import sys
+
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -86,3 +89,23 @@ def test_list_skips_broken_entries(project):
 def test_load_missing_cert_raises(project):
     with pytest.raises(client_certs.CertError, match="No client certificate"):
         client_certs.load_client_cert(project, "ghost")
+
+
+def test_p12_is_unprotected(project):
+    protected = client_certs.issue_client_cert(project, "alice", serial=1, p12_password="pw")
+    open_ = client_certs.issue_client_cert(project, "bob", serial=2, p12_password="")
+    assert not client_certs.p12_is_unprotected(protected.p12_path)
+    assert client_certs.p12_is_unprotected(open_.p12_path)
+
+
+def test_name_with_trailing_newline_rejected(project):
+    with pytest.raises(client_certs.CertError):
+        client_certs.issue_client_cert(project, "alice\n", serial=1, p12_password="pw")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_key_and_p12_are_owner_only(project):
+    info = client_certs.issue_client_cert(project, "alice", serial=1, p12_password="pw")
+    target = client_certs.client_dir(project, "alice")
+    for path in (target / "alice.key", info.p12_path, ca.ca_key_path(project)):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, path

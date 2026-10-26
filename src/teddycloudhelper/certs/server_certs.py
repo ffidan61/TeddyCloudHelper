@@ -11,6 +11,7 @@ Two unrelated jobs that both concern "server" certs:
 from __future__ import annotations
 
 import ipaddress
+import re
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -24,6 +25,29 @@ from teddycloudhelper.certs.ca import CertError
 
 WEBUI_CERT_VALIDITY_DAYS = 1095
 
+# RFC 1123 labels. The hostname lands verbatim in nginx.conf (server_name,
+# SNI map), the compose file and — for Let's Encrypt — a filesystem path,
+# so anything beyond letters, digits, '-' and '.' is rejected outright.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOSTNAME_RE = re.compile(rf"{_LABEL}(?:\.{_LABEL})*")
+
+
+def validate_webui_hostname(hostname: str) -> str:
+    """Normalized WebUI hostname (DNS name or IP), or CertError."""
+    hostname = hostname.strip().lower().rstrip(".")
+    if not hostname:
+        raise CertError("Hostname must not be empty.")
+    try:
+        return str(ipaddress.ip_address(hostname))
+    except ValueError:
+        pass
+    if len(hostname) > 253 or not _HOSTNAME_RE.fullmatch(hostname):
+        raise CertError(
+            f"{hostname!r} is not a valid hostname — only letters, digits, "
+            "'-' and '.' are allowed (or an IP address)."
+        )
+    return hostname
+
 
 def server_dir(project_dir: Path) -> Path:
     return ca_mod.pki_dir(project_dir) / "server"
@@ -33,9 +57,7 @@ def create_webui_server_cert(
     project_dir: Path, hostname: str, days: int = WEBUI_CERT_VALIDITY_DAYS
 ) -> Path:
     """Self-signed HTTPS cert for the WebUI (SAN = hostname or IP)."""
-    hostname = hostname.strip()
-    if not hostname:
-        raise CertError("Hostname must not be empty.")
+    hostname = validate_webui_hostname(hostname)
     try:
         san: x509.GeneralName = x509.IPAddress(ipaddress.ip_address(hostname))
     except ValueError:

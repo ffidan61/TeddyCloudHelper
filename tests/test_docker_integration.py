@@ -58,8 +58,11 @@ def nginx_t(project: Path) -> subprocess.CompletedProcess:
         # at config-check time already.
         "--add-host", "teddycloud:127.0.0.1",
         "-v", f"{project / 'nginx' / 'nginx.conf'}:/etc/nginx/nginx.conf:ro",
-        "-v", f"{project / 'webui-pki'}:/etc/teddycloudhelper/webui-pki:ro",
     ]
+    pki, pki_target = project / "webui-pki", "/etc/teddycloudhelper/webui-pki"
+    for rel in ("server", "ca/ca.crt", "crl"):
+        if (pki / rel).exists():
+            args += ["-v", f"{pki / rel}:{pki_target}/{rel}:ro"]
     if (project / "security").is_dir():
         args += ["-v", f"{project / 'security'}:/etc/teddycloudhelper/security:ro"]
     if (project / "letsencrypt").is_dir():

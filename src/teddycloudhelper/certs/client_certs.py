@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+from teddycloudhelper import fileperm
 from teddycloudhelper.certs import ca as ca_mod
 from teddycloudhelper.certs.ca import CertError
 
@@ -54,7 +55,7 @@ def issue_client_cert(
     days: int = CLIENT_VALIDITY_DAYS,
 ) -> ClientCertInfo:
     """Issue a browser client cert signed by the WebUI CA."""
-    if not _NAME_RE.match(name):
+    if not _NAME_RE.fullmatch(name):
         raise CertError(
             f"Invalid name {name!r}: use letters, digits, '.', '_' or '-' "
             "(it becomes a directory and file name)."
@@ -102,12 +103,24 @@ def issue_client_cert(
     else:
         encryption = serialization.NoEncryption()
     p12_path = target / f"{name}.p12"
-    p12_path.write_bytes(
+    # The .p12 holds the private key — owner-only like the .key file.
+    fileperm.write_private(
+        p12_path,
         pkcs12.serialize_key_and_certificates(
             name.encode(), key, cert, cas=[ca_cert], encryption_algorithm=encryption
-        )
+        ),
     )
     return _info(name, cert, cert_path, p12_path)
+
+
+def p12_is_unprotected(p12_path: Path) -> bool:
+    """True when the bundle opens without a password — the private key is
+    then effectively plaintext to anyone who gets hold of the file."""
+    try:
+        pkcs12.load_key_and_certificates(p12_path.read_bytes(), None)
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def load_client_cert(project_dir: Path, name: str) -> x509.Certificate:

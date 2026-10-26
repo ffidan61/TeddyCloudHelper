@@ -70,8 +70,12 @@ def nginx_config_test(
         # nginx resolves the compose service name at config-check time.
         "--add-host", "teddycloud:127.0.0.1",
         "-v", f"{conf}:/etc/nginx/nginx.conf:ro",
-        "-v", f"{project_dir / 'webui-pki'}:/etc/teddycloudhelper/webui-pki:ro",
     ]
+    # Only the PKI parts the compose file gives nginx — never the CA key.
+    pki, pki_target = project_dir / "webui-pki", "/etc/teddycloudhelper/webui-pki"
+    for rel in ("server", "ca/ca.crt", "crl"):
+        if (pki / rel).exists():
+            args += ["-v", f"{pki / rel}:{pki_target}/{rel}:ro"]
     if (project_dir / "security").is_dir():
         args += ["-v", f"{project_dir / 'security'}:/etc/teddycloudhelper/security:ro"]
     if (project_dir / "letsencrypt").is_dir():

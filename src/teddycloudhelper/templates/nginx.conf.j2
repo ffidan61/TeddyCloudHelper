@@ -79,7 +79,11 @@ http {
         # The box fetches the time over plain HTTP (/v1/time) BEFORE its
         # first TLS handshake — certificate validation needs a correct
         # clock. A redirect here bricks the box's boot sequence.
-        location /v1/ {
+        # Exact match ONLY: TeddyCloud answers every box-API route
+        # (/v1/content, /v1/claim, /v1/cloud-reset, ...) on its plain-HTTP
+        # port too, without any client-cert check — those must never be
+        # reachable from the internet.
+        location = /v1/time {
             set $teddycloud_http http://teddycloud:80;
             proxy_pass $teddycloud_http;
             proxy_set_header Host $host;
