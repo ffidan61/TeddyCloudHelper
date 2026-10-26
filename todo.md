@@ -175,6 +175,43 @@ darf auf diese Dateien verweisen, niemals ihr Inhalt.
 
 ---
 
+### 3. Self-Update aus dem Tool heraus
+
+**Ist-Zustand:** `cli.py::main()` zeigt beim Start nur
+`updates.update_notice(__version__)` an (gelber Hinweis mit "Run 'uv tool
+upgrade teddycloudhelper'"). Das Update selbst muss der Nutzer in der Shell
+ausführen.
+
+**Soll-Zustand:** Hauptmenü-Eintrag "Update TeddyCloudHelper" in
+`MENU_ACTIONS` (`cli.py`) — nur einblenden, wenn `update_notice` beim Start
+eine neuere Version gemeldet hat (Ergebnis in einer Variable merken, nicht
+erneut abfragen). Ablauf:
+1. `ui.confirm("Update to vX.Y.Z now?")`
+2. `subprocess.run(["uv", "tool", "upgrade", "teddycloudhelper"])` als
+   Args-Liste (nie `shell=True`), Ausgabe live durchreichen. Fehlt `uv` im
+   PATH (`shutil.which("uv") is None`) → Fehler-Panel mit dem manuellen
+   Befehl, kein Absturz.
+3. Bei Erfolg: Hinweis "Updated — please restart teddycloudhelper" und das
+   Programm beenden (`_dispatch` gibt False zurück). Ein Neustart ist nötig,
+   weil der laufende Prozess noch den alten Code geladen hat; ein
+   automatisches `os.execv` lieber nicht (unter sudo/Windows fehleranfällig).
+4. Ziel ist Linux/Prod; unter Windows kann uv die laufende `.exe` evtl.
+   nicht ersetzen → Fehler sauber anzeigen.
+
+**Offene Prüfung vorab:** Klären, ob `uv tool upgrade` bei einer
+git+ssh-Installation (ohne gepinnten Ref) zuverlässig den neuesten Commit
+zieht. Falls nicht: stattdessen `uv tool install --force
+"git+ssh://git@github.com/ffidan61/TeddyCloudHelper"` (wie in der README)
+ausführen — und dann auch den Text in `updates.update_notice` anpassen.
+Außerdem: unter `sudo` gestartet → Upgrade würde roots uv-Installation
+treffen statt die des Nutzers; dann Hinweis statt Ausführung.
+
+**Test:** `tests/test_cli.py` — Runner als Seam injizierbar machen (Muster
+wie `docker_cli`), prüfen: Menüpunkt nur bei verfügbarem Update; korrekte
+Args-Liste; Exit-Code ≠ 0 → Fehler-Panel, Menü läuft weiter.
+
+---
+
 ## B — Testen auf dem Prod-Server (keine Implementierung, nur Durchführung)
 
 - [ ] Docker-Integrationstests einmal laufen lassen:
