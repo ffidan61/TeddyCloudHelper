@@ -28,33 +28,42 @@ stream {
     # would otherwise leave nginx proxying to a dead IP until a restart.
     map $ssl_preread_server_name $upstream_443 {
 {%- if webui_port_mode == "shared" %}
-        # SNI split: the WebUI hostname is terminated locally (via the
-        # PROXY-protocol hop below); everything else — including boxes,
-        # which send no SNI at all — is passed through untouched to
-        # TeddyCloud.
-        {{ webui_hostname }} 127.0.0.1:8445;
-{%- endif %}
+        # SNI split: the WebUI hostname is terminated locally (loopback TLS
+        # listener in the http block); everything else — including boxes,
+        # which send no SNI at all — goes to TeddyCloud via the box hop
+        # below.
+        {{ webui_hostname }} 127.0.0.1:8444;
+        default 127.0.0.1:8445;
+{%- else %}
         default teddycloud:443;
+{%- endif %}
     }
 
     server {
         listen 443;
         ssl_preread on;
         resolver 127.0.0.11 valid=30s;
+{%- if webui_port_mode == "shared" %}
+        # Real client IP for the WebUI: only THIS server knows it, so the
+        # PROXY header must be added here — a later hop would only report
+        # 127.0.0.1 (the v0.21.1 mistake). It goes to both branches; the
+        # box hop strips it again before TeddyCloud.
+        proxy_protocol on;
+{%- endif %}
         proxy_pass $upstream_443;
     }
 {%- if webui_port_mode == "shared" %}
 
-    # WebUI branch only: hand the real client IP to the http block via the
-    # PROXY protocol — without this hop every WebUI request arrives from
-    # 127.0.0.1 and IP rules (allowlist, satisfy any) cannot work.
-    # proxy_protocol is per stream server, so it needs its own server:
-    # on the 443 server it would also hit TeddyCloud, which does not speak
-    # it, and break the box path.
+    # Box hop: accept the PROXY header and pass the raw TLS stream on
+    # WITHOUT it — TeddyCloud does not speak the PROXY protocol, and the box
+    # mTLS handshake must reach it byte-for-byte.
     server {
-        listen 127.0.0.1:8445;
-        proxy_protocol on;
-        proxy_pass 127.0.0.1:8444;
+        listen 127.0.0.1:8445 proxy_protocol;
+        # Already logged by the 443 server (with the real client address).
+        access_log off;
+        resolver 127.0.0.11 valid=30s;
+        set $teddycloud_443 teddycloud:443;
+        proxy_pass $teddycloud_443;
     }
 {%- endif %}
 }

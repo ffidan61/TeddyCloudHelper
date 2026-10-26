@@ -161,38 +161,46 @@ def test_compose_nginx_shared_has_no_extra_port():
 # --- nginx.conf.j2 ------------------------------------------------------------
 
 
+def _stream_block(text: str) -> str:
+    return text.split("stream {", 1)[1].split("\nhttp {", 1)[0]
+
+
+def _stream_server(stream: str, listen: str) -> str:
+    return stream.split(listen, 1)[1].split("}", 1)[0]
+
+
 def test_nginx_shared_uses_sni_split():
     text = render.render_template("nginx.conf.j2", NGINX_SHARED)
     assert "ssl_preread on;" in text
     assert "map $ssl_preread_server_name" in text
-    assert "tc.example.com 127.0.0.1:8445;" in text
-    assert "default teddycloud:443;" in text
+    assert "tc.example.com 127.0.0.1:8444;" in text
+    assert "default 127.0.0.1:8445;" in text  # box hop
     assert "listen 127.0.0.1:8444 ssl proxy_protocol;" in text
 
 
 def test_nginx_shared_passes_real_client_ip():
-    # Without the PROXY-protocol hop every WebUI request arrives from
-    # 127.0.0.1 — IP allowlist and `satisfy any` cannot work (found
-    # 2026-10-26). The hop must carry the header to the http block, and
-    # only loopback may set it.
+    # Only the 443 server knows the client address, so IT must add the
+    # PROXY header. v0.21.1 added it on a later loopback hop, which only
+    # ever reported 127.0.0.1 — the allowlist then blocked everyone (prod,
+    # 2026-10-26). The http listener trusts the header from loopback only.
     text = render.render_template("nginx.conf.j2", NGINX_SHARED)
-    stream = text.split("stream {", 1)[1].split("\nhttp {", 1)[0]
-    hop = stream.split("listen 127.0.0.1:8445;", 1)[1].split("}", 1)[0]
-    assert "proxy_protocol on;" in hop
-    assert "proxy_pass 127.0.0.1:8444;" in hop
+    stream = _stream_block(text)
+    assert "proxy_protocol on;" in _stream_server(stream, "listen 443;")
+    assert stream.count("proxy_protocol on;") == 1
     assert "set_real_ip_from 127.0.0.1;" in text
     assert "real_ip_header   proxy_protocol;" in text
 
 
-def test_nginx_shared_box_path_gets_no_proxy_protocol():
-    # TeddyCloud does not speak the PROXY protocol — the box path (the
-    # 443 server and its default branch) must stay plain passthrough.
-    text = render.render_template("nginx.conf.j2", NGINX_SHARED)
-    stream = text.split("stream {", 1)[1].split("\nhttp {", 1)[0]
-    server_443 = stream.split("listen 443;", 1)[1].split("}", 1)[0]
-    assert "proxy_protocol" not in server_443
-    assert stream.count("proxy_protocol on;") == 1
-    assert "8444" not in stream.split("map $ssl_preread_server_name", 1)[1].split("}", 1)[0]
+def test_nginx_shared_box_hop_strips_proxy_protocol():
+    # TeddyCloud does not speak the PROXY protocol: the box hop accepts the
+    # header (listen ... proxy_protocol) and forwards the raw TLS stream
+    # without it (no `proxy_protocol on`) — runtime-tested in
+    # test_docker_integration.py.
+    stream = _stream_block(render.render_template("nginx.conf.j2", NGINX_SHARED))
+    hop = _stream_server(stream, "listen 127.0.0.1:8445 proxy_protocol;")
+    assert "proxy_protocol on;" not in hop
+    assert "set $teddycloud_443 teddycloud:443;" in hop
+    assert "proxy_pass $teddycloud_443;" in hop
 
 
 def test_nginx_separate_passes_443_through():
@@ -216,6 +224,7 @@ def test_nginx_resolves_teddycloud_at_runtime():
         assert "resolver 127.0.0.11" in text
         assert "proxy_pass $upstream_443;" in text
         assert "proxy_pass $teddycloud_http;" in text
+        assert "proxy_pass 127.0.0.1" not in text
         assert "proxy_pass teddycloud:443;" not in text
         assert "proxy_pass http://teddycloud:80;" not in text
 
