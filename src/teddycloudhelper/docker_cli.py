@@ -169,8 +169,9 @@ class Compose:
     def stop(self) -> None:
         self._run("stop")
 
-    def restart(self) -> None:
-        self._run("restart")
+    def restart(self, service: str | None = None) -> None:
+        """Restart all services, or only ``service``."""
+        self._run("restart", *([service] if service is not None else []))
 
     def pull(self) -> None:
         self._run("pull")

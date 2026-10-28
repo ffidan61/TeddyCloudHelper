@@ -47,6 +47,13 @@ uv run pytest tests/test_state.py::test_save_then_load_roundtrip   # single test
   (`proxy_request_buffering off`), never buffer them.
 - TeddyCloud serves web routes on ports 80/8443 only; **port 443 is an API-only listener**
   (`api_access_only`) that answers all WebUI/API-web routes with 404 "File not found".
+- **Internet scanners on port 443 lock TeddyCloud** (verified 2026-10 in prod logs:
+  "Crawler access detected"). Its security mitigation checks the User-Agent (Censys,
+  Shodan, Nmap, ...) on *every* listener *before* any auth — box port 443 included,
+  where client certs are only `TLS_CLIENT_AUTH_OPTIONAL` — and the lock blocks the box
+  API and the settings API until restart. nginx can't filter it (TLS passthrough).
+  Fix: `security_mit.onCrawler=false` via the settings API (`secmit.py`), only when
+  nginx protects the WebUI; robots.txt/blacklist triggers stay on.
 - **The box fetches the time over plain HTTP (`/v1/time`, port 80) BEFORE its first TLS
   handshake** — certificate validation needs a correct clock. Port 80 must therefore
   proxy `/v1/` to TeddyCloud; a redirect there bricks the box boot sequence (Codewort
@@ -100,7 +107,8 @@ src/teddycloudhelper/
 │                  #        security-mitigation-lock detection, WebUI protection, DNS,
 │                  #        box certs, known boxes via /api/getBoxes, LE expiry with
 │                  #        live-TLS fallback, CA-change guard via state fingerprint,
-│                  #        backup freshness) via injectable Probes seam
+│                  #        backup freshness, scanner lock) via injectable Probes seam
+├── secmit.py      # TeddyCloud security-mitigation (scanner lock): onCrawler via settings API
 ├── menus/         # per-topic submenus
 └── templates/     # *.j2 for compose + nginx (shared-443 SNI split / separate WebUI port)
 ```

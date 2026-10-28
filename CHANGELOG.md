@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.22.0
+
+- Fixed: TeddyCloud kept locking itself ("locked to mitigate security
+  risks") after a while, cutting off the boxes — even with the WebUI fully
+  protected. Cause: TeddyCloud's crawler check (`security_mit.onCrawler`)
+  runs on **every** listener before any authentication, including the box
+  port 443, which must stay open to the internet and only optionally asks
+  for a client certificate. A single scanner request (Censys, Shodan, Nmap,
+  Nuclei, ...) to `https://<your-ip>/` locked the instance until the next
+  restart. nginx cannot filter it — the box path is TLS passthrough.
+- New Security menu action "Stop internet scanners from locking TeddyCloud"
+  (nginx mode with WebUI protection only): turns `security_mit.onCrawler`
+  off via TeddyCloud's settings API and saves it to `config.ini`; a locked
+  instance is restarted first (the lock blocks the API too). The other
+  triggers (robots.txt, blacklisted domains) can only arrive through the
+  protected WebUI and stay on.
+- New doctor check "Scanner lock": queries the setting inside the
+  container, so it sees the lock even behind client-cert auth (the WebUI
+  check only saw the TLS rejection and reported "ok").
+
 ## v0.21.2
 
 - Fixed v0.21.1's real-IP fix, which did not work: it added the PROXY

@@ -26,6 +26,7 @@ def make_probes(**overrides) -> doctor.Probes:
         local_image_digest=lambda image: "sha256:abc",
         remote_image_digest=lambda image: "sha256:abc",
         teddycloud_mounts=lambda: healthy_mounts(),
+        crawler_setting=lambda: "false",
     )
     return doctor.Probes(**(defaults | overrides))
 
@@ -289,6 +290,46 @@ def test_webui_detects_security_mitigation_lock():
     result = doctor.check_webui(AppState(), probes)
     assert result.status == "fail"
     assert "LOCKED" in result.detail
+
+
+PROTECTED = dict(deployment_mode="nginx", webui_client_cert_auth=True)
+LOCKED = "TeddyCloud has been locked to mitigate security risks! Please check the logs"
+
+
+def test_scanner_lock_detects_lock_behind_client_certs():
+    # Production 2026-10: a scanner hit port 443 → lock. check_webui saw only
+    # the client-cert TLS rejection and reported "ok".
+    probes = make_probes(crawler_setting=lambda: LOCKED)
+    result = doctor.check_scanner_lock(AppState(**PROTECTED), probes)
+    assert result.status == "fail"
+    assert "Security menu" in result.detail
+
+
+def test_scanner_lock_locked_and_unprotected_points_to_protection():
+    probes = make_probes(crawler_setting=lambda: LOCKED)
+    result = doctor.check_scanner_lock(AppState(), probes)
+    assert result.status == "fail"
+    assert "Protect the WebUI" in result.detail
+
+
+def test_scanner_lock_warns_when_on_behind_protection():
+    probes = make_probes(crawler_setting=lambda: "true")
+    assert doctor.check_scanner_lock(AppState(**PROTECTED), probes).status == "warn"
+
+
+def test_scanner_lock_on_is_fine_while_unprotected():
+    probes = make_probes(crawler_setting=lambda: "true")
+    assert doctor.check_scanner_lock(AppState(), probes).status == "ok"
+
+
+def test_scanner_lock_off_is_ok():
+    assert doctor.check_scanner_lock(AppState(**PROTECTED), make_probes()).status == "ok"
+
+
+@pytest.mark.parametrize("answer", [None, "ERROR"])
+def test_scanner_lock_undeterminable_warns(answer):
+    probes = make_probes(crawler_setting=lambda: answer)
+    assert doctor.check_scanner_lock(AppState(), probes).status == "warn"
 
 
 def test_webui_detects_security_warning():

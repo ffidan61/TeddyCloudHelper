@@ -28,7 +28,7 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 
-from teddycloudhelper import backup, docker_cli, ports
+from teddycloudhelper import backup, docker_cli, ports, secmit
 from teddycloudhelper.certs import ca as ca_mod
 from teddycloudhelper.certs import letsencrypt, server_certs
 from teddycloudhelper.certs.ca import CertError
@@ -104,6 +104,10 @@ class Probes:
     # points at now. None if undeterminable — the comparison is then skipped.
     running_image_id: Callable[[str], str | None] = lambda service: None
     local_image_id: Callable[[str], str | None] = lambda image: None
+    # Raw answer of /api/settings/get/security_mit.onCrawler from inside the
+    # container — "true"/"false", or the lock message while TeddyCloud is
+    # locked. None if undeterminable.
+    crawler_setting: Callable[[], str | None] = lambda: None
 
 
 # --- default (real) probe implementations ------------------------------------
@@ -286,6 +290,12 @@ def default_probes(project_dir: Path) -> Probes:
             "teddycloud", "curl", "-s", "http://localhost:80/api/getBoxes"
         ).stdout
 
+    def crawler_setting() -> str | None:
+        try:
+            return secmit.get_crawler_setting(compose)
+        except docker_cli.DockerError:
+            return None
+
     def container_name(service: str) -> str:
         # Resolve the container name via compose ps — adopted installs may
         # not use the template's fixed container_name.
@@ -336,6 +346,7 @@ def default_probes(project_dir: Path) -> Probes:
         latest_teddycloud_release=_latest_teddycloud_release,
         running_image_id=running_image_id,
         local_image_id=_local_image_id,
+        crawler_setting=crawler_setting,
     )
 
 
@@ -874,6 +885,59 @@ def check_webui_protection(state: AppState) -> CheckResult:
     )
 
 
+def check_scanner_lock(state: AppState, probes: Probes) -> CheckResult:
+    """TeddyCloud's crawler detection, queried from inside the container.
+
+    The WebUI check cannot see the lock behind client-cert auth (the TLS
+    handshake fails first), and scanners on port 443 trip it no matter how
+    well nginx guards the WebUI — see :mod:`teddycloudhelper.secmit`.
+    """
+    name = "Scanner lock"
+    answer = probes.crawler_setting()
+    if answer is None:
+        return CheckResult(
+            name, "warn", f"Could not query {secmit.CRAWLER_SETTING} inside the container."
+        )
+    if secmit.is_locked(answer):
+        return CheckResult(
+            name,
+            "fail",
+            "TeddyCloud has LOCKED itself (security mitigation) — the boxes "
+            "are cut off. "
+            + (
+                "Run 'Stop internet scanners from locking TeddyCloud' in the "
+                "Security menu: it restarts TeddyCloud and keeps scanners on "
+                "port 443 from locking it again."
+                if secmit.webui_protected(state)
+                else "Protect the WebUI (client certificates, Basic Auth or "
+                "IP allowlist), then restart the services."
+            ),
+        )
+    if answer == "false":
+        return CheckResult(
+            name, "ok", "Crawler detection is off — scanners cannot lock TeddyCloud."
+        )
+    if answer != "true":
+        return CheckResult(
+            name, "warn", f"Unexpected {secmit.CRAWLER_SETTING} answer: {answer[:120]!r}"
+        )
+    if secmit.webui_protected(state):
+        return CheckResult(
+            name,
+            "warn",
+            "Crawler detection is on: any internet scanner reaching port 443 "
+            "(the box port) locks TeddyCloud and cuts off the boxes. nginx "
+            "already protects the WebUI — turn it off via 'Stop internet "
+            "scanners from locking TeddyCloud' in the Security menu.",
+        )
+    return CheckResult(
+        name,
+        "ok",
+        "Crawler detection is on — the last line of defence while the WebUI "
+        "is unprotected.",
+    )
+
+
 def check_files(project_dir: Path, state: AppState) -> CheckResult:
     missing = []
     if docker_cli.find_compose_file(project_dir) is None:
@@ -904,6 +968,7 @@ def run_checks(
         check_box_tls(state, probes),
         check_webui(state, probes),
         check_webui_protection(state),
+        check_scanner_lock(state, probes),
         check_box_dns(probes),
         check_ca_identity(project_dir, state),
         check_box_certs(project_dir),

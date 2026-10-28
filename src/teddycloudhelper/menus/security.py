@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from teddycloudhelper import docker_cli, security, ui, wizard
+from teddycloudhelper import docker_cli, secmit, security, ui, wizard
 from teddycloudhelper import state as state_mod
 from teddycloudhelper.certs import ca, crl
 from teddycloudhelper.certs.ca import CertError
@@ -26,6 +26,7 @@ MENU_ACTIONS: list[tuple[str, str]] = [
     ("Add an IP allowlist entry", "add_ip"),
     ("Remove an IP allowlist entry", "remove_ip"),
     ("Let allowed IPs skip Basic Auth (satisfy any)", "toggle_bypass"),
+    ("Stop internet scanners from locking TeddyCloud", "scanner_lock"),
     ("Back to project settings", "back"),
 ]
 
@@ -128,6 +129,31 @@ def _toggle_bypass(state: AppState, project: Path) -> None:
     _apply(state, project)
 
 
+def _scanner_lock(state: AppState, project: Path) -> None:
+    if not secmit.webui_protected(state):
+        ui.error_panel(
+            "TeddyCloud's scanner lock is the last line of defence while the "
+            "WebUI is unprotected — enable client certificates, Basic Auth or "
+            "the IP allowlist (nginx mode) first, then come back."
+        )
+        return
+    if not ui.confirm(
+        "Internet scanners reaching port 443 (the box port, which must stay "
+        "open) lock TeddyCloud until the next restart — boxes included. "
+        "nginx already protects the WebUI, so turn off TeddyCloud's crawler "
+        "detection? (A locked instance is restarted first.)",
+        default=True,
+    ):
+        return
+    if secmit.disable_crawler_lock(docker_cli.Compose(project)):
+        ui.info_panel(
+            f"{secmit.CRAWLER_SETTING} is now off and saved to config.ini — "
+            "scanners can no longer lock TeddyCloud."
+        )
+    else:
+        ui.info_panel(f"{secmit.CRAWLER_SETTING} was already off — nothing to do.")
+
+
 def _prompt_set_user(project: Path) -> None:
     username = ui.ask_text("Username:")
     password = ui.ask_password("Password:")
@@ -200,6 +226,7 @@ _HANDLERS = {
     "add_ip": _add_ip,
     "remove_ip": _remove_ip,
     "toggle_bypass": _toggle_bypass,
+    "scanner_lock": _scanner_lock,
 }
 
 
@@ -222,6 +249,7 @@ def run() -> None:
             continue
         except (
             SecurityError,
+            secmit.SecMitError,
             CertError,
             state_mod.StateError,
             docker_cli.DockerError,

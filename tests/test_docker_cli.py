@@ -105,6 +105,12 @@ def test_lifecycle_commands_build_args(tmp_path, method, expected_args):
     assert runner.calls == [(["docker", "compose", *expected_args], tmp_path)]
 
 
+def test_restart_single_service(tmp_path):
+    compose, runner = make_compose(tmp_path)
+    compose.restart("teddycloud")
+    assert runner.calls == [(["docker", "compose", "restart", "teddycloud"], tmp_path)]
+
+
 def test_down_without_volumes(tmp_path):
     compose, runner = make_compose(tmp_path)
     compose.down()

@@ -16,7 +16,8 @@ reimplemented from scratch in Python.
   mode, security) without re-running the wizard; shows the current
   configuration on entry
 - **Health check ("doctor")** — containers, ports, the certificate the box
-  sees on 443, WebUI (incl. TeddyCloud's security-mitigation lock), DNS for
+  sees on 443, WebUI and TeddyCloud's security-mitigation lock (queried inside
+  the container, so it is seen behind client certs too), DNS for
   the box hostname, CA-change guard, box certs, known boxes, Let's Encrypt
   expiry, image freshness, backup age.
   Also runs headless for cron: `teddycloudhelper --doctor` (exit 1 on failures)
@@ -73,6 +74,11 @@ To upgrade an existing install, add `--force`.
 - Port 443 is an API-only listener; the web routes live on 80/8443 only.
 - An unprotected WebUI reachable from the internet triggers TeddyCloud's
   security-mitigation lock, which also cuts off the boxes.
+- So does **any internet scanner on port 443** (Censys, Shodan, Nmap, ...):
+  TeddyCloud's crawler check runs before any authentication, on the box port
+  too, and nginx cannot filter the TLS passthrough. With nginx protecting the
+  WebUI, turn it off via Security → "Stop internet scanners from locking
+  TeddyCloud" (the doctor's "Scanner lock" check points there).
 - The box trusts exactly one CA (`certs/server/ca.der`). Never regenerate it
   once boxes are flashed — the doctor guards its fingerprint.
 
