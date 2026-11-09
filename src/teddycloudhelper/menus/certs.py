@@ -192,8 +192,18 @@ def _server_cert(project: Path) -> None:
     hostname = server_certs.validate_webui_hostname(
         ui.ask_text("Hostname or IP the WebUI is reached at:", default=state.webui_hostname)
     )
+    if state.webui_hostname and hostname != state.webui_hostname:
+        # The hostname is also in nginx.conf (SNI routing, server_name) and
+        # decides the Let's Encrypt paths — changing it here alone would
+        # leave the running config on the old name.
+        ui.error_panel(
+            f"The WebUI hostname is {state.webui_hostname!r}. To change it, use "
+            "Project settings → WebUI hostname: that re-renders nginx and "
+            "creates the matching certificate."
+        )
+        return
     path = server_certs.create_webui_server_cert(project, hostname)
-    if hostname != state.webui_hostname:
+    if not state.webui_hostname:
         state.webui_hostname = hostname
         state_mod.save_state(state, project)
     ui.info_panel(f"Self-signed WebUI certificate written: {path}")

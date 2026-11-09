@@ -783,15 +783,20 @@ def check_ca_identity(project_dir: Path, state: AppState) -> CheckResult:
     """The box CA must never change silently — flashed boxes trust exactly
     this CA. Records the fingerprint on first sight (caller saves state)."""
     name = "Server CA"
-    fingerprint = server_certs.box_ca_fingerprint(project_dir)
-    if fingerprint is None:
+    try:
+        fingerprint = server_certs.box_ca_fingerprint(project_dir)
+        ca = server_certs.load_box_ca(project_dir) if fingerprint else None
+    except CertError as exc:
+        # Truncated/corrupt ca.der (e.g. read during TeddyCloud's first
+        # start) — report it, never crash the whole doctor run.
+        return CheckResult(name, "fail", f"certs/server/ca.der is unreadable: {exc}")
+    if fingerprint is None or ca is None:
         return CheckResult(
             name,
             "warn",
             "certs/server/ca.der does not exist yet — TeddyCloud generates "
             "it on first container start.",
         )
-    ca = server_certs.load_box_ca(project_dir)
     identity = f"serial {ca.serial_number:x}, SHA-256 {fingerprint[:16]}…"
     if not state.known_ca_fingerprint:
         state.known_ca_fingerprint = fingerprint
@@ -866,6 +871,15 @@ def check_webui_protection(state: AppState) -> CheckResult:
     """An unprotected WebUI trips TeddyCloud's security-mitigation lock as
     soon as internet scanners find it — which also cuts off the boxes."""
     name = "WebUI protection"
+    if state.deployment_mode != "nginx":
+        return CheckResult(
+            name,
+            "warn",
+            "Direct mode: TeddyCloud publishes its WebUI without any "
+            "protection (Basic Auth, client certificates and the IP allowlist "
+            "need nginx mode). Keep the WebUI ports off the internet, or "
+            "switch to nginx mode.",
+        )
     active = []
     if state.basic_auth_enabled:
         active.append("Basic Auth")

@@ -54,12 +54,21 @@ def create_backup(project_dir: Path, dest_dir: Path | None = None) -> Path:
     dest_dir = dest_dir or default_backup_dir(project_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = _unique_path(dest_dir)
+    # Written under a temporary name and renamed when complete: a failed
+    # backup (unreadable file, disk full) must not leave a truncated archive
+    # that list_backups and the doctor would count as the newest backup.
+    partial = path.with_name(path.name + ".part")
     # The archive holds every private key of the project (WebUI CA, client
     # certs, the dumped box certs) — create it owner-only before writing.
-    fileperm.write_private(path, b"")
-    with tarfile.open(path, "w:gz") as tar:
-        for item in items:
-            tar.add(item, arcname=item.name)
+    fileperm.write_private(partial, b"")
+    try:
+        with tarfile.open(partial, "w:gz") as tar:
+            for item in items:
+                tar.add(item, arcname=item.name)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    partial.replace(path)
     return path
 
 

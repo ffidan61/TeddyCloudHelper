@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.23.0
+
+Bug fixes from a review of the whole project.
+
+- Fixed: with Let's Encrypt configured but its certificate missing (new
+  hostname, another host, restored backup), nginx could be pointed at
+  certificate files that don't exist and refuse to start — taking the box
+  path on port 443 and port 80 down with it. The wizard and "Set up Let's
+  Encrypt" now fall back to the self-signed certificate until LE is set up,
+  and the first LE phase validates (`nginx -t`) and restarts nginx properly.
+- Fixed: restoring a backup of a Let's Encrypt project on another machine
+  left nginx unable to start (backups don't include `letsencrypt/`). After
+  the restore the WebUI now falls back to self-signed with a note to re-run
+  Let's Encrypt.
+- Fixed: after re-creating the WebUI CA, the old revocation list (CRL)
+  stayed in place and nginx rejected every client certificate. A CRL from
+  a previous CA is now replaced.
+- Fixed: a failed image pull during the pre-restart `nginx -t` check was
+  taken for a broken config — the valid config was rolled back and the
+  restart refused.
+- Fixed: "Create self-signed WebUI server certificate" changed the WebUI
+  hostname without re-rendering nginx. Changing the hostname now goes
+  through Project settings only.
+- Shared port 443 now refuses an IP address as WebUI hostname: browsers
+  never send an IP as TLS server name, so the WebUI was unreachable.
+- Doctor: "WebUI protection" warns in direct mode (nothing protects the
+  WebUI there, whatever the old settings say); a corrupt `ca.der` is
+  reported instead of crashing the whole doctor run.
+- The dumped box private key (and its backup) is now stored owner-only
+  (0600), like every other key.
+- A failed backup no longer leaves a truncated archive that counted as the
+  newest backup.
+- IP allowlist entries and ports from the state file are validated again
+  before they go into nginx.conf / docker-compose.yml.
+- Project settings: the shared-443 warning no longer claims the box needs
+  its own hostname (boxes send no SNI).
+
 ## v0.22.3
 
 - "Stop internet scanners from locking TeddyCloud" now restarts exactly the

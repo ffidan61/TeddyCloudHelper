@@ -16,6 +16,7 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
+from teddycloudhelper import fileperm
 from teddycloudhelper.certs.ca import CertError
 
 BOX_CERT_NAMES = ("ca.der", "client.der", "private.der")
@@ -71,9 +72,17 @@ def install_box_certs(
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     for source, name in zip((ca_der, client_der, private_der), BOX_CERT_NAMES, strict=True):
         dest = dest_dir / name
-        if dest.is_file():
-            shutil.copy2(dest, dest.with_name(f"{name}.{stamp}.bak"))
-        shutil.copy2(source, dest)
+        backup_path = dest.with_name(f"{name}.{stamp}.bak")
+        if name == "private.der":
+            # Key material: owner-only, whatever mode the source had (often
+            # 0644 from a USB stick or a download).
+            if dest.is_file():
+                fileperm.write_private(backup_path, dest.read_bytes())
+            fileperm.write_private(dest, source.read_bytes())
+        else:
+            if dest.is_file():
+                shutil.copy2(dest, backup_path)
+            shutil.copy2(source, dest)
         installed.append(dest)
     return installed
 

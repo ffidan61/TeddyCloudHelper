@@ -239,3 +239,52 @@ def test_port_mode_switch_to_separate_asks_port(tmp_path, monkeypatch, quiet):
     assert state.webui_port_mode == "separate"
     assert state.webui_port == 9443
     assert (tmp_path / "docker-compose.yml").is_file()
+
+
+def test_shared_port_with_ip_hostname_is_refused_and_not_saved(tmp_path, monkeypatch, quiet):
+    from teddycloudhelper import state as state_mod
+
+    state = AppState(deployment_mode="nginx", webui_hostname="192.168.1.10")
+    state_mod.save_state(state, tmp_path)
+    monkeypatch.setattr(ui, "menu", lambda *a, **kw: "shared")
+    no_restart(monkeypatch)
+
+    with pytest.raises(ValueError, match="DNS name"):
+        settings._port_mode(state, tmp_path)
+
+    assert state_mod.load_state(tmp_path).webui_port_mode == "separate"
+
+
+def test_server_cert_action_does_not_change_the_hostname(tmp_path, monkeypatch, quiet):
+    from teddycloudhelper import state as state_mod
+    from teddycloudhelper.menus import certs as certs_menu
+
+    state_mod.save_state(
+        AppState(deployment_mode="nginx", webui_hostname="tc.example.com"), tmp_path
+    )
+    monkeypatch.setattr(ui, "ask_text", lambda *a, **kw: "other.example.com")
+
+    certs_menu._server_cert(tmp_path)
+
+    assert state_mod.load_state(tmp_path).webui_hostname == "tc.example.com"
+    assert not server_certs.webui_cert_matches(tmp_path, "other.example.com")
+
+
+def test_restore_falls_back_to_self_signed_without_le_cert(tmp_path, monkeypatch, quiet):
+    from teddycloudhelper import state as state_mod
+    from teddycloudhelper.menus import backup as backup_menu
+
+    state_mod.save_state(
+        AppState(
+            deployment_mode="nginx", webui_hostname="tc.example.com",
+            webui_tls_mode="letsencrypt", letsencrypt_enabled=True,
+        ),
+        tmp_path,
+    )
+
+    backup_menu._fall_back_to_self_signed(tmp_path)
+
+    assert state_mod.load_state(tmp_path).webui_tls_mode == "selfsigned"
+    conf = (tmp_path / "nginx" / "nginx.conf").read_text()
+    assert "letsencrypt/live" not in conf
+    assert server_certs.webui_cert_matches(tmp_path, "tc.example.com")

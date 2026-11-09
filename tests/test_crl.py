@@ -65,3 +65,33 @@ def test_garbage_crl_raises(project):
 def test_crl_without_ca_raises(tmp_path):
     with pytest.raises(crl.CertError, match="No WebUI CA"):
         crl.ensure_crl(tmp_path)
+
+
+def _recreate_ca(project):
+    for path in (ca.ca_cert_path(project), ca.ca_key_path(project)):
+        path.unlink()
+    ca.create_ca(project)
+
+
+def test_ensure_crl_replaces_crl_of_previous_ca(project):
+    # Deleting and re-creating the CA left the old CRL behind: nginx then
+    # rejected every client cert of the new CA (stale CRL signature).
+    crl.revoke_serial(project, 7)
+    _recreate_ca(project)
+
+    crl.ensure_crl(project)
+
+    ca_cert, _ = ca.load_ca(project)
+    assert load_crl(project).is_signature_valid(ca_cert.public_key())
+    assert crl.revoked_serials(project) == []
+
+
+def test_revoke_after_ca_change_drops_old_serials(project):
+    crl.revoke_serial(project, 7)
+    _recreate_ca(project)
+
+    crl.revoke_serial(project, 3)
+
+    assert crl.revoked_serials(project) == [3]
+    ca_cert, _ = ca.load_ca(project)
+    assert load_crl(project).is_signature_valid(ca_cert.public_key())

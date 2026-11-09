@@ -365,6 +365,37 @@ Zertifikat ok; Reise (1 Tag) → Mobilfunk mit Zertifikat ok, nach Ablauf +
 
 ---
 
+### 7. Restore eines älteren Backups: Sperrungen und Seriennummern
+
+**Gefunden:** Projekt-Bugsuche 2026-11-09 (v0.23.0), bewusst nicht im
+Bugfix-Release, weil es ein Designthema ist.
+
+**Betroffene Dateien:** `src/teddycloudhelper/backup.py` (`restore_backup`),
+`src/teddycloudhelper/menus/backup.py` (`_restore`),
+`src/teddycloudhelper/state.py` (`next_serial`),
+`src/teddycloudhelper/certs/crl.py`, `src/teddycloudhelper/certs/client_certs.py`.
+
+**Ist-Zustand:** Ein Restore überschreibt `webui-pki/crl/ca.crl` und
+`teddycloudhelper.json` mit dem Stand des Backups. Szenario: Backup anlegen →
+Client-Cert Serial 5 ausstellen und sperren → altes Backup zurückspielen.
+Folgen: (1) die Sperrung von Serial 5 ist weg, das (evtl. geleakte) Cert
+funktioniert wieder; (2) `next_serial` springt auf 5 zurück, das nächste
+Cert bekommt wieder Serial 5 — zwei gültige Certs mit derselben Serial,
+Sperren des einen sperrt beide; (3) `webui-pki/clients/<name>/`-Ordner, die
+nach dem Backup entstanden sind, bleiben liegen und wirken gültig.
+
+**Soll-Zustand:**
+1. Vor dem Restore die aktuellen CRL-Einträge lesen (`crl.revoked_serials`),
+   nach dem Restore mit denen aus dem Backup **vereinigen** und neu signieren
+   (nur wenn beide CRLs von derselben CA stammen — sonst gilt die
+   wiederhergestellte, siehe `crl._signed_by_current_ca`).
+2. `next_serial` nach dem Restore auf
+   `max(state.next_serial, höchste Serial unter webui-pki/clients/ + 1,
+   höchste gesperrte Serial + 1)` setzen.
+3. Client-Cert-Ordner, die auf der Platte, aber nicht im Backup sind, in
+   einem Warn-Panel auflisten (nicht löschen) und anbieten, sie zu sperren.
+4. Tests in `tests/test_backup.py` für alle drei Punkte.
+
 ## B — Testen auf dem Prod-Server (keine Implementierung, nur Durchführung)
 
 - [ ] Docker-Integrationstests einmal laufen lassen:

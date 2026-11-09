@@ -55,6 +55,8 @@ def _show(state: AppState, project: Path) -> None:
 
 def _apply(state: AppState, project: Path) -> None:
     """The standard cycle: save state, re-render, offer restart."""
+    # Refuse before saving — a rejected combination must not be persisted.
+    wizard.check_shared_port_hostname(state)
     state_mod.save_state(state, project)
     rendered = wizard.render_project(state, project)
     ui.console.print("Re-rendered: " + ", ".join(str(p) for p in rendered))
@@ -102,7 +104,7 @@ def _port_mode(state: AppState, project: Path) -> None:
             ("On its own port, default 8443 (recommended)", "separate"),
             (
                 "On 443, shared with the box via SNI split "
-                "(advanced — the box then needs its OWN hostname)",
+                "(advanced — routes by TLS server name)",
                 "shared",
             ),
         ],
@@ -110,11 +112,7 @@ def _port_mode(state: AppState, project: Path) -> None:
     if mode == "separate":
         state.webui_port = wizard._ask_port(state.webui_port or 8443)
     elif state.webui_port_mode != "shared":
-        ui.warn_panel(
-            "On shared 443, a box whose firmware is patched with the WebUI "
-            "hostname cannot connect — give the box its own DNS name.",
-            title="Shared port 443",
-        )
+        ui.warn_panel(wizard.shared_port_warning(state.webui_hostname), title="Shared port 443")
     if mode == state.webui_port_mode and mode == "shared":
         ui.info_panel("Already sharing port 443 — nothing to do.")
         return

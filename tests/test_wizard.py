@@ -345,15 +345,16 @@ def test_setup_letsencrypt_three_phases(tmp_path, monkeypatch):
 
     wizard.setup_letsencrypt(tmp_path, state, "tc.example.com")
 
-    # phase 1: up with certbot plumbing, then certonly, then up again
-    assert FakeCompose.calls[0] == ("up",)
-    assert FakeCompose.calls[1][:2] == ("run", "certbot")
-    assert FakeCompose.calls[1][2] == "certbot"  # entrypoint override, or it hangs
-    assert "certonly" in FakeCompose.calls[1]
-    assert "tc.example.com" in FakeCompose.calls[1]
+    # phase 1: validated up + restart (a running nginx must load the ACME
+    # location), then certonly, then up + restart again
+    assert FakeCompose.calls[:2] == [("up",), ("restart",)]
+    assert FakeCompose.calls[2][:2] == ("run", "certbot")
+    assert FakeCompose.calls[2][2] == "certbot"  # entrypoint override, or it hangs
+    assert "certonly" in FakeCompose.calls[2]
+    assert "tc.example.com" in FakeCompose.calls[2]
     # phase 3 must force a restart: nginx.conf is bind-mounted, `up` alone
     # would leave nginx on the self-signed cert
-    assert FakeCompose.calls[2:] == [("up",), ("restart",)]
+    assert FakeCompose.calls[3:] == [("up",), ("restart",)]
     # state persisted with the final TLS mode
     saved = state_mod.load_state(tmp_path)
     assert saved.webui_tls_mode == "letsencrypt"
@@ -366,6 +367,9 @@ def test_setup_letsencrypt_aborts_when_no_cert_appears(tmp_path, monkeypatch):
     FakeCompose.calls = []
     FakeCompose.issue_cert = False  # certbot "succeeds" but writes nothing
     monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
+    monkeypatch.setattr(
+        docker_cli, "nginx_config_test", lambda p: subprocess.CompletedProcess([], 0)
+    )
     quiet_panels(monkeypatch)
     quiet_probe(monkeypatch)
     state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
@@ -377,7 +381,9 @@ def test_setup_letsencrypt_aborts_when_no_cert_appears(tmp_path, monkeypatch):
     saved = state_mod.load_state(tmp_path)
     assert saved.webui_tls_mode == "selfsigned"
     assert "letsencrypt/live" not in (tmp_path / "nginx" / "nginx.conf").read_text()
-    assert ("restart",) not in FakeCompose.calls
+    # no phase-3 restart after the (empty) certbot run
+    certbot_at = next(i for i, c in enumerate(FakeCompose.calls) if c[:2] == ("run", "certbot"))
+    assert ("restart",) not in FakeCompose.calls[certbot_at:]
 
 
 def test_setup_letsencrypt_aborts_when_probe_fails_and_user_declines(tmp_path, monkeypatch):
@@ -657,3 +663,96 @@ def test_render_project_client_certs_without_ca_raises(tmp_path):
     )
     with pytest.raises(ValueError, match="CA is missing"):
         wizard.render_project(state, tmp_path)
+
+
+def test_setup_letsencrypt_phase1_never_renders_missing_le_paths(tmp_path, monkeypatch):
+    # State says LE (e.g. hostname changed, restored backup) but no cert is
+    # on disk: phase 1 must start nginx self-signed, or it cannot start.
+    FakeCompose.calls = []
+    FakeCompose.issue_cert = False
+    monkeypatch.setattr(docker_cli, "Compose", FakeCompose)
+    confs = []
+
+    def nginx_test(project_dir):
+        confs.append((project_dir / "nginx" / "nginx.conf").read_text())
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(docker_cli, "nginx_config_test", nginx_test)
+    quiet_panels(monkeypatch)
+    quiet_probe(monkeypatch)
+    state = AppState(
+        deployment_mode="nginx", webui_hostname="tc.example.com",
+        webui_tls_mode="letsencrypt",
+    )
+    with pytest.raises(wizard.CertError):
+        wizard.setup_letsencrypt(tmp_path, state, "tc.example.com")
+    assert confs and "letsencrypt/live" not in confs[0]
+    assert state_mod.load_state(tmp_path).webui_tls_mode == "selfsigned"
+
+
+def test_render_rejects_ip_hostname_in_shared_mode(tmp_path):
+    state = AppState(
+        deployment_mode="nginx", webui_hostname="192.168.1.10", webui_port_mode="shared"
+    )
+    with pytest.raises(ValueError, match="DNS name"):
+        wizard.render_project(state, tmp_path)
+
+
+def test_render_allows_ip_hostname_on_separate_port(tmp_path):
+    state = AppState(deployment_mode="nginx", webui_hostname="192.168.1.10")
+    wizard.render_project(state, tmp_path)
+
+
+def test_render_revalidates_allowlist_entries(tmp_path):
+    state = AppState(
+        deployment_mode="nginx", webui_hostname="tc.example.com",
+        ip_allowlist=["1.2.3.4; location /x { }"],
+    )
+    with pytest.raises(ValueError, match="allowlist"):
+        wizard.render_project(state, tmp_path)
+
+
+@pytest.mark.parametrize("port", ["8443; evil", 0, 70000, True])
+def test_render_revalidates_ports(tmp_path, port):
+    state = AppState(deployment_mode="nginx", webui_hostname="tc.example.com")
+    state.webui_port = port
+    with pytest.raises(ValueError, match="webui_port"):
+        wizard.render_project(state, tmp_path)
+
+
+def test_failed_image_pull_is_not_treated_as_config_error(tmp_path, monkeypatch):
+    conf = tmp_path / "nginx" / "nginx.conf"
+    conf.parent.mkdir()
+    conf.write_text("good")
+    (conf.parent / "nginx.conf.20260101-000000.bak").write_text("old")
+    message = (
+        "Unable to find image 'nginx:stable-alpine' locally\n"
+        "docker: Error response from daemon: dial tcp: lookup registry-1.docker.io"
+    )
+    monkeypatch.setattr(
+        docker_cli, "nginx_config_test",
+        lambda p: subprocess.CompletedProcess([], 125, stdout="", stderr=message),
+    )
+    warnings = []
+    monkeypatch.setattr(wizard.ui, "warn_panel", lambda *a, **kw: warnings.append(a))
+    wizard.check_nginx_before_restart(tmp_path)  # no DockerError
+    assert conf.read_text() == "good"  # not rolled back
+    assert warnings
+
+
+def test_real_nginx_error_still_rolls_back(tmp_path, monkeypatch):
+    conf = tmp_path / "nginx" / "nginx.conf"
+    conf.parent.mkdir()
+    conf.write_text("bad")
+    (conf.parent / "nginx.conf.20260101-000000.bak").write_text("old")
+    message = (
+        'nginx: [emerg] unknown directive "bogus" in /etc/nginx/nginx.conf:3\n'
+        "nginx: configuration file /etc/nginx/nginx.conf test failed"
+    )
+    monkeypatch.setattr(
+        docker_cli, "nginx_config_test",
+        lambda p: subprocess.CompletedProcess([], 1, stdout="", stderr=message),
+    )
+    with pytest.raises(docker_cli.DockerError, match="nginx -t"):
+        wizard.check_nginx_before_restart(tmp_path)
+    assert conf.read_text() == "old"

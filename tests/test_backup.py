@@ -126,3 +126,15 @@ def test_backup_archive_is_owner_only(project):
     # The archive holds every private key of the project.
     path = backup.create_backup(project)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_failed_backup_leaves_no_archive(project, monkeypatch):
+    # A half-written archive would count as the newest backup.
+    def boom(self, *args, **kwargs):
+        raise PermissionError("unreadable")
+
+    monkeypatch.setattr(tarfile.TarFile, "add", boom)
+    with pytest.raises(PermissionError):
+        backup.create_backup(project)
+    assert backup.list_backups(project) == []
+    assert list(backup.default_backup_dir(project).iterdir()) == []

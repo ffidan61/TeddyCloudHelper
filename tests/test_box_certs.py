@@ -128,3 +128,23 @@ def test_install_refuses_mismatched_key(dump, tmp_path):
     with pytest.raises(box_certs.CertError, match="does not match"):
         box_certs.install_box_certs(project, *_paths(dump))
     assert not (project / "certs" / "client").exists()
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="POSIX file modes")
+def test_install_writes_private_key_owner_only(dump, tmp_path):
+    import stat
+
+    (dump / "private.der").chmod(0o644)
+    project = tmp_path / "project"
+    dest = project / "certs" / "client"
+    dest.mkdir(parents=True)
+    (dest / "private.der").write_bytes(b"old key")
+    (dest / "private.der").chmod(0o644)
+
+    box_certs.install_box_certs(project, *_paths(dump))
+
+    assert stat.S_IMODE((dest / "private.der").stat().st_mode) == 0o600
+    (backup_file,) = dest.glob("private.der.*.bak")
+    assert stat.S_IMODE(backup_file.stat().st_mode) == 0o600
+    assert backup_file.read_bytes() == b"old key"
+    assert (dest / "private.der").read_bytes() == (dump / "private.der").read_bytes()

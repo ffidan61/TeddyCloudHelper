@@ -376,17 +376,26 @@ def test_dns_unresolvable_warns():
 def test_webui_protection_none_warns():
     # Unprotected WebUIs trip TeddyCloud's security-mitigation lock (seen
     # in prod 2026-07: internet scanners → lock → boxes cut off).
-    result = doctor.check_webui_protection(AppState())
+    result = doctor.check_webui_protection(AppState(deployment_mode="nginx"))
     assert result.status == "warn"
     assert "locks itself" in result.detail
+
+
+def test_webui_protection_direct_mode_warns_despite_leftover_flags():
+    # nginx -> direct keeps the auth flags in the state, but nothing
+    # enforces them any more: TeddyCloud serves its WebUI unprotected.
+    state = AppState(deployment_mode="direct", basic_auth_enabled=True)
+    result = doctor.check_webui_protection(state)
+    assert result.status == "warn"
+    assert "Direct mode" in result.detail
 
 
 @pytest.mark.parametrize(
     "state",
     [
-        AppState(basic_auth_enabled=True),
-        AppState(webui_client_cert_auth=True),
-        AppState(ip_allowlist=["192.168.0.0/24"]),
+        AppState(deployment_mode="nginx", basic_auth_enabled=True),
+        AppState(deployment_mode="nginx", webui_client_cert_auth=True),
+        AppState(deployment_mode="nginx", ip_allowlist=["192.168.0.0/24"]),
     ],
 )
 def test_webui_protection_any_mechanism_ok(state):
@@ -794,6 +803,18 @@ def test_run_checks_healthy_project_all_ok(tmp_path):
     (tmp_path / "backups").mkdir()
     (tmp_path / "backups" / "teddycloudhelper-backup-20260705-120000.tar.gz").write_bytes(b"x")
     results = doctor.run_checks(tmp_path, AppState(basic_auth_enabled=True), make_probes())
+    # Direct mode: the WebUI protection check rightly warns — everything
+    # else must be ok.
+    results = [r for r in results if r.name != "WebUI protection"]
     assert all(r.status == "ok" for r in results), [
         (r.name, r.detail) for r in results if r.status != "ok"
     ]
+
+
+def test_ca_identity_reports_corrupt_ca_der_instead_of_crashing(tmp_path):
+    ca_der = tmp_path / "certs" / "server" / "ca.der"
+    ca_der.parent.mkdir(parents=True)
+    ca_der.write_bytes(b"\x30\x82\x01")  # truncated DER
+    result = doctor.check_ca_identity(tmp_path, AppState())
+    assert result.status == "fail"
+    assert "unreadable" in result.detail

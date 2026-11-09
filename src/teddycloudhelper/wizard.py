@@ -8,6 +8,7 @@ the standard cycle — save state, render templates (with ``.bak``), prompt for
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shutil
 from pathlib import Path
@@ -35,6 +36,36 @@ DATA_DIRS = (
     "cache",
     "plugins",
 )
+
+
+def shared_port_warning(hostname: str) -> str:
+    """Explanation shown when the WebUI shares port 443 with the box."""
+    return (
+        "Shared 443 routes by TLS server name (SNI): connections using "
+        f"{hostname!r} go to the WebUI, everything else to the box endpoint. "
+        "Tonieboxes send no SNI at all, so this works out of the box with no "
+        "firmware changes — the only way to break it is patching the box's "
+        f"firmware to present the exact WebUI hostname {hostname!r} as its "
+        "own SNI. Don't do that."
+    )
+
+
+def check_shared_port_hostname(state: AppState) -> None:
+    """Shared 443 routes by SNI, and clients never send an IP address as SNI
+    (RFC 6066) — with an IP as WebUI hostname every request would land on
+    TeddyCloud's API-only box listener (404). Raises ValueError."""
+    if state.deployment_mode != "nginx" or state.webui_port_mode != "shared":
+        return
+    try:
+        ipaddress.ip_address(state.webui_hostname)
+    except ValueError:
+        return
+    raise ValueError(
+        f"Sharing port 443 needs a DNS name as WebUI hostname, not the IP "
+        f"address {state.webui_hostname!r}: browsers never send an IP as TLS "
+        "server name (SNI), so the WebUI would be unreachable. Use a DNS name "
+        "or let the WebUI listen on its own port."
+    )
 
 
 def step_project_dir() -> Path:
@@ -156,19 +187,17 @@ def step_webui(state: AppState) -> None:
             ),
         ],
     )
+    if state.webui_port_mode == "shared":
+        try:
+            check_shared_port_hostname(state)
+        except ValueError as exc:
+            ui.error_panel(str(exc))
+            ui.info_panel("The WebUI gets its own port instead.")
+            state.webui_port_mode = "separate"
     if state.webui_port_mode == "separate":
         state.webui_port = _ask_port(state.webui_port or 8443)
     else:
-        ui.warn_panel(
-            "Shared 443 routes by TLS server name (SNI): connections using "
-            f"{state.webui_hostname!r} go to the WebUI, everything else to "
-            "the box endpoint. Tonieboxes send no SNI at all, so this works "
-            "out of the box with no firmware changes — the only way to "
-            "break it is patching the box's firmware to present the exact "
-            f"WebUI hostname {state.webui_hostname!r} as its own SNI. Don't "
-            "do that.",
-            title="Shared port 443",
-        )
+        ui.warn_panel(shared_port_warning(state.webui_hostname), title="Shared port 443")
 
 
 def _ask_port(default: int) -> int:
@@ -311,13 +340,20 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None
     3. Verify the cert landed on disk, then switch nginx over and restart.
     """
     state.letsencrypt_enabled = True
+    if not letsencrypt.cert_exists(project_dir, hostname):
+        # Phase 1 must serve the ACME webroot with a cert that exists —
+        # LE paths without files would keep nginx (and the box path on
+        # 443) from starting.
+        state.webui_tls_mode = "selfsigned"
     state_mod.save_state(state, project_dir)
     render_project(state, project_dir)
     # Create the webroot before docker does, so it is owned by this user and
     # the challenge self-test below can write its probe file.
     (project_dir / "certbot-www").mkdir(parents=True, exist_ok=True)
     compose = docker_cli.Compose(project_dir)
-    compose.up()
+    # Validated (nginx -t) and restarted, so a running nginx actually loads
+    # the new ACME location instead of serving the old bind-mounted config.
+    restart_services(project_dir)
 
     ui.console.print("Testing the HTTP-01 challenge path…")
     problem = letsencrypt.probe_http_challenge(project_dir, hostname)
@@ -374,6 +410,19 @@ def setup_letsencrypt(project_dir: Path, state: AppState, hostname: str) -> None
     )
 
 
+def fall_back_if_le_cert_missing(state: AppState, project_dir: Path) -> bool:
+    """Switch the WebUI to self-signed when LE is configured but its cert is
+    not on disk (backups don't contain ``letsencrypt/``; new host, new
+    hostname). nginx would not start against missing cert files — taking
+    the box path on 443 down with it. Returns True when it switched."""
+    if state.deployment_mode != "nginx" or state.webui_tls_mode != "letsencrypt":
+        return False
+    if letsencrypt.cert_exists(project_dir, state.webui_hostname):
+        return False
+    state.webui_tls_mode = "selfsigned"
+    return True
+
+
 def disable_letsencrypt_without_nginx(state: AppState) -> bool:
     """Reset LE state when the mode has no nginx (and thus no certbot).
 
@@ -408,6 +457,19 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         # Goes verbatim into nginx.conf — re-check here so a hand-edited
         # state file or a restored backup cannot inject directives.
         server_certs.validate_webui_hostname(state.webui_hostname)
+    check_shared_port_hostname(state)
+    # Same for the allowlist and ports: they go verbatim into nginx.conf
+    # and docker-compose.yml.
+    try:
+        allowlist = [security.normalize_allowlist_entry(e) for e in state.ip_allowlist]
+    except security.SecurityError as exc:
+        raise ValueError(f"Invalid IP allowlist entry in the state file: {exc}") from exc
+    ports = {}
+    for name in ("webui_port", "http_port"):
+        value = getattr(state, name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+            raise ValueError(f"Invalid {name} in the state file: {value!r}")
+        ports[name] = value
     for name in DATA_DIRS:
         (project_dir / name).mkdir(parents=True, exist_ok=True)
     if state.deployment_mode == "nginx":
@@ -427,11 +489,11 @@ def render_project(state: AppState, project_dir: Path) -> list[Path]:
         "pgid": state.pgid,
         "webui_port_mode": state.webui_port_mode,
         "webui_hostname": state.webui_hostname,
-        "webui_port": state.webui_port,
-        "http_port": state.http_port,
+        "webui_port": ports["webui_port"],
+        "http_port": ports["http_port"],
         "webui_client_cert_auth": state.webui_client_cert_auth,
         "basic_auth_enabled": state.basic_auth_enabled,
-        "ip_allowlist": state.ip_allowlist,
+        "ip_allowlist": allowlist,
         "ip_bypasses_basic_auth": state.ip_bypasses_basic_auth,
         "webui_tls_mode": state.webui_tls_mode,
         "letsencrypt_enabled": state.letsencrypt_enabled,
@@ -486,7 +548,10 @@ def check_nginx_before_restart(project_dir: Path) -> None:
     if result is None or result.returncode == 0:
         return
     message = (result.stderr or result.stdout or "").strip()
-    if "test failed" not in message and "nginx:" not in message:
+    # nginx's own verdict ("nginx: [emerg] ...", "... test failed"). Not just
+    # "nginx:" — docker's "Unable to find image 'nginx:stable-alpine'"
+    # contains that too, and a failed pull is no config error.
+    if "test failed" not in message and "[emerg]" not in message:
         # `docker run` failed for a reason other than the config (daemon
         # down, image pull failed) — don't block a legitimate restart on our
         # own inability to check it.
@@ -553,6 +618,9 @@ def run() -> None:
                 "already present — keeping it."
             )
         else:
+            # No cert for this hostname (new name, other host, restored
+            # backup): self-signed until LE is set up for it.
+            fall_back_if_le_cert_missing(state, project_dir)
             le = step_letsencrypt(state)
     elif disable_letsencrypt_without_nginx(state):
         ui.info_panel(LETSENCRYPT_RESET_NOTE, title="Let's Encrypt disabled")

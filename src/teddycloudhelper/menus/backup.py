@@ -13,7 +13,9 @@ from pathlib import Path
 from rich.table import Table
 
 from teddycloudhelper import backup, docker_cli, ui, wizard
+from teddycloudhelper import state as state_mod
 from teddycloudhelper.backup import BackupError
+from teddycloudhelper.certs import server_certs
 from teddycloudhelper.menus import project as project_menu
 
 MENU_ACTIONS: list[tuple[str, str]] = [
@@ -82,10 +84,36 @@ def _restore(project: Path) -> None:
         f"Safety backup of the previous config: {safety}",
         title="Backup restored",
     )
+    _fall_back_to_self_signed(project)
     if ui.confirm("Restart services now to run with the restored config?", default=True):
         # Restored configs are bind-mounted — a plain `up` would leave running
         # containers on the old files; this also `nginx -t`s the restored conf.
         wizard.restart_services(project)
+
+
+def _fall_back_to_self_signed(project: Path) -> None:
+    """Backups don't contain ``letsencrypt/`` (root-owned certbot files) —
+    restored on another host, the LE cert paths in nginx.conf would not
+    exist and nginx (with the box path) would not start."""
+    try:
+        state = state_mod.load_state(project)
+    except state_mod.StateError:
+        return
+    if not wizard.fall_back_if_le_cert_missing(state, project):
+        return
+    if state.webui_hostname and not server_certs.webui_cert_matches(
+        project, state.webui_hostname
+    ):
+        server_certs.create_webui_server_cert(project, state.webui_hostname)
+    state_mod.save_state(state, project)
+    wizard.render_project(state, project)
+    ui.warn_panel(
+        f"The backup uses Let's Encrypt for {state.webui_hostname}, but the "
+        "certificate is not on this machine (backups don't include it). The "
+        "WebUI uses a self-signed certificate for now — re-run 'Set up "
+        "Let's Encrypt' from the certificate menu.",
+        title="Let's Encrypt reset",
+    )
 
 
 def run() -> None:
