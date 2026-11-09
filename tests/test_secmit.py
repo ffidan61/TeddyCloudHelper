@@ -60,7 +60,8 @@ def test_disable_edits_config_ini_with_teddycloud_stopped(tmp_path):
     assert secmit.CONFIG_INI in script
     assert "security_mit.onCrawler=false" in script
     assert "sed -i" not in script  # keep inode/owner/mode of config.ini
-    assert cmds[3] == ["start", "teddycloud"]
+    # `stop teddycloud` also stops nginx (depends_on) — start the whole project.
+    assert cmds[3] == ["start"]
     # No settings/set or triggerWriteConfig — that path did not persist in prod.
     assert curl_urls(runner) == [
         "http://localhost:80/api/settings/get/security_mit.onCrawler",
@@ -74,6 +75,21 @@ def test_disable_is_noop_when_already_off(tmp_path):
     assert len(runner.calls) == 1
 
 
+class FakeClock:
+    """Monotonic clock that only advances when the code under test sleeps."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 def test_disable_handles_a_locked_instance(tmp_path):
     # The lock blocks the API, but stop/edit/start clears it anyway.
     compose, runner = make_compose(
@@ -85,13 +101,26 @@ def test_disable_handles_a_locked_instance(tmp_path):
         completed(returncode=7, stderr="connection refused"),  # still starting
         completed(stdout="false"),
     )
-    sleeps = []
-    assert secmit.disable_crawler_lock(compose, sleep=sleeps.append) is True
+    clock = FakeClock()
+    assert secmit.disable_crawler_lock(compose, sleep=clock.sleep, clock=clock) is True
     assert compose_cmds(runner)[1] == ["stop", "teddycloud"]
-    assert len(sleeps) == 1
+    assert len(clock.sleeps) == 1
 
 
-def test_disable_starts_teddycloud_again_when_edit_fails(tmp_path):
+@pytest.mark.parametrize("not_ready", ["", "File not found", LOCKED])
+def test_disable_keeps_polling_until_a_real_answer(tmp_path, not_ready):
+    compose, _ = make_compose(
+        tmp_path,
+        completed(stdout="true"), completed(), completed(), completed(),
+        completed(stdout=not_ready),
+        completed(stdout="false"),
+    )
+    clock = FakeClock()
+    assert secmit.disable_crawler_lock(compose, sleep=clock.sleep, clock=clock) is True
+    assert len(clock.sleeps) == 1
+
+
+def test_disable_starts_services_again_when_edit_fails(tmp_path):
     compose, runner = make_compose(
         tmp_path,
         completed(stdout="true"),
@@ -101,7 +130,23 @@ def test_disable_starts_teddycloud_again_when_edit_fails(tmp_path):
     )
     with pytest.raises(docker_cli.DockerError, match="not found"):
         secmit.disable_crawler_lock(compose)
-    assert compose_cmds(runner)[-1] == ["start", "teddycloud"]
+    assert compose_cmds(runner)[-1] == ["start"]
+
+
+def test_disable_keeps_edit_error_when_start_fails_too(tmp_path):
+    compose, _ = make_compose(
+        tmp_path,
+        completed(stdout="true"),
+        completed(),  # stop
+        completed(returncode=3, stderr="config.ini not found"),  # run
+        completed(returncode=1, stderr="port is already allocated"),  # start
+    )
+    with pytest.raises(secmit.SecMitError) as info:
+        secmit.disable_crawler_lock(compose)
+    message = str(info.value)
+    assert "config.ini not found" in message
+    assert "port is already allocated" in message
+    assert "docker compose up -d" in message
 
 
 def test_disable_fails_when_value_did_not_change(tmp_path):
@@ -114,13 +159,30 @@ def test_disable_fails_when_value_did_not_change(tmp_path):
         secmit.disable_crawler_lock(compose, sleep=lambda s: None)
 
 
-def test_disable_gives_up_when_still_locked(tmp_path):
+def test_disable_gives_up_after_the_timeout(tmp_path):
+    clock = FakeClock()
     compose, _ = make_compose(
         tmp_path, completed(stdout=LOCKED), completed(), completed(), completed(),
         *[completed(stdout=LOCKED)] * 10,
     )
-    with pytest.raises(secmit.SecMitError, match="did not answer unlocked"):
-        secmit.disable_crawler_lock(compose, sleep=lambda s: None, timeout=6)
+    with pytest.raises(secmit.SecMitError, match="within 6s"):
+        secmit.disable_crawler_lock(compose, sleep=clock.sleep, clock=clock, timeout=6)
+    assert clock.now == 6
+
+
+def test_timeout_counts_slow_answers(tmp_path):
+    # Each curl takes 10s of wall-clock time: the 6s deadline is hit after
+    # the first attempt instead of after two sleep intervals.
+    clock = FakeClock()
+
+    def slow_runner(args, cwd):
+        clock.now += 10
+        return completed(stdout="")
+
+    compose = docker_cli.Compose(tmp_path, runner=slow_runner)
+    with pytest.raises(secmit.SecMitError, match="within 6s"):
+        secmit._wait_for_setting(compose, clock.sleep, clock, 6)
+    assert clock.sleeps == []
 
 
 def test_disable_rejects_unexpected_answer(tmp_path):

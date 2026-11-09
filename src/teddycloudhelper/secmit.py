@@ -86,42 +86,54 @@ def is_locked(answer: str) -> bool:
     return LOCK_MARKER in answer
 
 
-def _wait_until_unlocked(
+def _wait_for_setting(
     compose: docker_cli.Compose,
     sleep: Callable[[float], None],
+    clock: Callable[[], float],
     timeout: float,
 ) -> str:
-    waited = 0.0
+    """Poll until TeddyCloud answers ``true``/``false`` for the setting.
+
+    Anything else (connection refused, the lock message, an empty body or a
+    404 while TeddyCloud is still starting) means "not ready yet". The
+    deadline is wall-clock, so slow curl calls count against it too.
+    """
+    deadline = clock() + timeout
+    last = ""
     while True:
         try:
-            answer = get_crawler_setting(compose)
-            if not is_locked(answer):
-                return answer
-        except docker_cli.DockerError:
-            pass  # still starting
-        if waited >= timeout:
+            last = get_crawler_setting(compose)
+            if last in ("true", "false"):
+                return last
+        except docker_cli.DockerError as exc:
+            last = str(exc)  # still starting
+        if clock() >= deadline:
             raise SecMitError(
-                f"TeddyCloud did not answer unlocked within {int(timeout)}s "
-                "after the restart — check `docker compose logs teddycloud`."
+                f"TeddyCloud did not report {CRAWLER_SETTING} within "
+                f"{int(timeout)}s after the restart (last answer: {last[:120]!r}) "
+                "— check `docker compose logs teddycloud`."
             )
         sleep(_READY_INTERVAL)
-        waited += _READY_INTERVAL
 
 
 def _edit_config_script() -> str:
     """Shell script that sets onCrawler=false in config.ini (or appends it).
 
-    Rewrites the file in place via ``cat >`` instead of ``sed -i`` so the
-    file keeps its inode, owner and mode.
+    Matches the key with optional surrounding whitespace (every such line is
+    replaced, duplicates included). Rewrites the file in place via ``cat >``
+    instead of ``sed -i`` so it keeps its inode, owner and mode, and adds a
+    missing final newline before appending so no line gets glued on.
     """
     key = CRAWLER_SETTING.replace(".", r"\.")
+    line_re = f"^[[:space:]]*{key}[[:space:]]*="
     return (
         f"f={CONFIG_INI}; "
         'test -f "$f" || { echo "$f not found - start TeddyCloud once first" >&2; exit 3; }; '
-        f"if grep -q '^{key}=' \"$f\"; then "
-        f"sed 's/^{key}=.*/{CRAWLER_SETTING}=false/' \"$f\" > /tmp/config.ini "
+        f"if grep -q '{line_re}' \"$f\"; then "
+        f"sed 's/{line_re}.*/{CRAWLER_SETTING}=false/' \"$f\" > /tmp/config.ini "
         '&& cat /tmp/config.ini > "$f"; '
-        f"else echo '{CRAWLER_SETTING}=false' >> \"$f\"; fi"
+        'else { [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && echo; '
+        f"echo '{CRAWLER_SETTING}=false'; }} >> \"$f\"; fi"
     )
 
 
@@ -129,31 +141,42 @@ def disable_crawler_lock(
     compose: docker_cli.Compose,
     sleep: Callable[[float], None] = time.sleep,
     timeout: float = _READY_TIMEOUT,
+    clock: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Turn ``security_mit.onCrawler`` off persistently in config.ini.
 
-    Stops TeddyCloud, edits config.ini, starts it again and verifies the
-    running value — which also clears an active lock. The boxes are offline
-    for those few seconds. Returns False (nothing touched) when the setting
-    is already off.
+    Stops TeddyCloud, edits config.ini, starts the project again and
+    verifies the running value — which also clears an active lock. The
+    boxes are offline for those few seconds. Returns False (nothing
+    touched) when the setting is already off.
     """
     answer = get_crawler_setting(compose)
     if answer == "false":
         return False
     if answer != "true" and not is_locked(answer):
         raise SecMitError(f"Unexpected answer for {CRAWLER_SETTING}: {answer[:120]!r}")
+    # `compose stop teddycloud` also stops its dependents (nginx), so the
+    # whole project is started again afterwards, not just teddycloud.
     compose.stop("teddycloud")
     try:
         compose.run_service(
             "teddycloud", "-c", _edit_config_script(), entrypoint="sh", no_deps=True
         )
-    finally:
-        # Never leave the boxes cut off, even when the edit failed.
-        compose.start("teddycloud")
-    answer = _wait_until_unlocked(compose, sleep, timeout)
+    except docker_cli.DockerError as exc:
+        # Never leave the boxes cut off — and keep the edit error visible.
+        try:
+            compose.start()
+        except docker_cli.DockerError as start_exc:
+            raise SecMitError(
+                f"Editing config.ini failed: {exc}\n\nStarting the services "
+                f"again failed too: {start_exc}\nRun `docker compose up -d`."
+            ) from exc
+        raise
+    compose.start()
+    answer = _wait_for_setting(compose, sleep, clock, timeout)
     if answer != "false":
         raise SecMitError(
-            f"{CRAWLER_SETTING} is still {answer[:40]!r} after editing "
+            f"{CRAWLER_SETTING} is still {answer!r} after editing "
             f"config.ini — check {CONFIG_INI} inside the container."
         )
     return True

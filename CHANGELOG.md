@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.22.2
+
+- Fixed: "Stop internet scanners from locking TeddyCloud" (v0.22.1) left
+  **nginx stopped** — stopping TeddyCloud also stops nginx (it depends on
+  TeddyCloud), but only TeddyCloud was started again, so the boxes and the
+  WebUI stayed offline while the action reported success. The whole
+  project is now started again. If you ran the action on v0.22.1, check
+  `docker compose ps` and run `docker compose up -d` if nginx is down.
+- The config.ini edit now also replaces `security_mit.onCrawler = true`
+  written with spaces (instead of appending a duplicate) and no longer glues
+  the new line onto the last one when the file has no final newline.
+- If both the edit and the restart fail, the error now shows both causes.
+- Waiting for TeddyCloud after the restart keeps polling through empty or
+  "File not found" answers while it starts, and the 90s timeout is real
+  wall-clock time (slow answers no longer stretch it to minutes).
+
 ## v0.22.1
 
 - Fixed: "Stop internet scanners from locking TeddyCloud" failed with
