@@ -52,8 +52,11 @@ uv run pytest tests/test_state.py::test_save_then_load_roundtrip   # single test
   Shodan, Nmap, ...) on *every* listener *before* any auth — box port 443 included,
   where client certs are only `TLS_CLIENT_AUTH_OPTIONAL` — and the lock blocks the box
   API and the settings API until restart. nginx can't filter it (TLS passthrough).
-  Fix: `security_mit.onCrawler=false` via the settings API (`secmit.py`), only when
-  nginx protects the WebUI; robots.txt/blacklist triggers stay on.
+  Fix: `security_mit.onCrawler=false` (`secmit.py`), only when nginx protects the
+  WebUI; robots.txt/blacklist triggers stay on. **Write it into `config/config.ini`
+  with TeddyCloud stopped** — in prod (2026-11) `POST /api/settings/set` answered
+  empty and `triggerWriteConfig` never persisted it, so a restart re-enabled it.
+  Reading via `/api/settings/get` works.
 - **The box fetches the time over plain HTTP (`/v1/time`, port 80) BEFORE its first TLS
   handshake** — certificate validation needs a correct clock. Port 80 must therefore
   proxy `/v1/` to TeddyCloud; a redirect there bricks the box boot sequence (Codewort

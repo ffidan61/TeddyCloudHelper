@@ -18,9 +18,15 @@ off switch — so we turn off ``security_mit.onCrawler``. The other triggers
 i.e. through nginx's protection; they stay on and still lock on a real
 exposure.
 
-All access goes through TeddyCloud's own settings API, queried inside the
+Reading goes through TeddyCloud's own settings API, queried inside the
 container (``compose exec``) like the doctor's /api/getBoxes, so neither
-nginx routing nor WebUI auth get in the way.
+nginx routing nor WebUI auth get in the way. Writing does NOT: in
+production (2026-11) ``POST /api/settings/set`` answered with an empty body
+and the value never reached config.ini, so a restart turned the lock back
+on. Instead TeddyCloud is stopped, ``config.ini`` is edited in a one-off
+container (works whatever the bind mount's host ownership) and TeddyCloud is
+started again — it reads config.ini on start, and being stopped it cannot
+overwrite the edit with its in-memory value.
 """
 
 from __future__ import annotations
@@ -38,6 +44,9 @@ CRAWLER_SETTING = "security_mit.onCrawler"
 LOCK_MARKER = "locked to mitigate security risks"
 
 _API = "http://localhost:80/api"
+
+# TeddyCloud's settings file inside the container (bind mount ./config).
+CONFIG_INI = "/teddycloud/config/config.ini"
 
 # A restarted TeddyCloud needs a few seconds before its API answers.
 _READY_TIMEOUT = 90.0
@@ -99,34 +108,52 @@ def _wait_until_unlocked(
         waited += _READY_INTERVAL
 
 
+def _edit_config_script() -> str:
+    """Shell script that sets onCrawler=false in config.ini (or appends it).
+
+    Rewrites the file in place via ``cat >`` instead of ``sed -i`` so the
+    file keeps its inode, owner and mode.
+    """
+    key = CRAWLER_SETTING.replace(".", r"\.")
+    return (
+        f"f={CONFIG_INI}; "
+        'test -f "$f" || { echo "$f not found - start TeddyCloud once first" >&2; exit 3; }; '
+        f"if grep -q '^{key}=' \"$f\"; then "
+        f"sed 's/^{key}=.*/{CRAWLER_SETTING}=false/' \"$f\" > /tmp/config.ini "
+        '&& cat /tmp/config.ini > "$f"; '
+        f"else echo '{CRAWLER_SETTING}=false' >> \"$f\"; fi"
+    )
+
+
 def disable_crawler_lock(
     compose: docker_cli.Compose,
     sleep: Callable[[float], None] = time.sleep,
     timeout: float = _READY_TIMEOUT,
 ) -> bool:
-    """Turn ``security_mit.onCrawler`` off and persist it to config.ini.
+    """Turn ``security_mit.onCrawler`` off persistently in config.ini.
 
-    A locked instance is restarted first (the lock blocks the settings API
-    too). Returns False when the setting was already off — though a lock
-    may still have been cleared by the restart.
+    Stops TeddyCloud, edits config.ini, starts it again and verifies the
+    running value — which also clears an active lock. The boxes are offline
+    for those few seconds. Returns False (nothing touched) when the setting
+    is already off.
     """
     answer = get_crawler_setting(compose)
-    if is_locked(answer):
-        compose.restart("teddycloud")
-        answer = _wait_until_unlocked(compose, sleep, timeout)
     if answer == "false":
         return False
-    if answer != "true":
+    if answer != "true" and not is_locked(answer):
         raise SecMitError(f"Unexpected answer for {CRAWLER_SETTING}: {answer[:120]!r}")
-    result = _curl(
-        compose, "-X", "POST", "--data-raw", "false",
-        f"{_API}/settings/set/{CRAWLER_SETTING}",
-    )
-    if result != "OK":
-        raise SecMitError(f"Setting {CRAWLER_SETTING} failed: {result[:120]!r}")
-    # /api/settings/set only changes the running instance; this writes
-    # config.ini so the setting survives restarts and image updates.
-    _curl(compose, f"{_API}/triggerWriteConfig")
-    if get_crawler_setting(compose) != "false":
-        raise SecMitError(f"{CRAWLER_SETTING} is still on after setting it.")
+    compose.stop("teddycloud")
+    try:
+        compose.run_service(
+            "teddycloud", "-c", _edit_config_script(), entrypoint="sh", no_deps=True
+        )
+    finally:
+        # Never leave the boxes cut off, even when the edit failed.
+        compose.start("teddycloud")
+    answer = _wait_until_unlocked(compose, sleep, timeout)
+    if answer != "false":
+        raise SecMitError(
+            f"{CRAWLER_SETTING} is still {answer[:40]!r} after editing "
+            f"config.ini — check {CONFIG_INI} inside the container."
+        )
     return True

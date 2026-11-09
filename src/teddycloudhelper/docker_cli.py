@@ -166,8 +166,13 @@ class Compose:
         # switching to direct mode); their old containers must not linger.
         self._run("up", "--detach", "--remove-orphans")
 
-    def stop(self) -> None:
-        self._run("stop")
+    def stop(self, service: str | None = None) -> None:
+        """Stop all services, or only ``service`` (container is kept)."""
+        self._run("stop", *([service] if service is not None else []))
+
+    def start(self, service: str | None = None) -> None:
+        """Start existing (stopped) containers, or only ``service``."""
+        self._run("start", *([service] if service is not None else []))
 
     def restart(self, service: str | None = None) -> None:
         """Restart all services, or only ``service``."""
@@ -185,16 +190,23 @@ class Compose:
         self._run(*args)
 
     def run_service(
-        self, service: str, *args: str, entrypoint: str | None = None
+        self,
+        service: str,
+        *args: str,
+        entrypoint: str | None = None,
+        no_deps: bool = False,
     ) -> subprocess.CompletedProcess:
         """One-off ``compose run --rm <service> <args…>``.
 
         ``entrypoint`` overrides the service's entrypoint — essential when the
         service defines a long-running loop as its entrypoint (like our
         certbot renewer): without the override, compose would run that loop
-        and ignore *args* entirely, hanging forever.
+        and ignore *args* entirely, hanging forever. ``no_deps`` keeps compose
+        from starting the service's dependencies alongside.
         """
         run_args = ["run", "--rm"]
+        if no_deps:
+            run_args.append("--no-deps")
         if entrypoint is not None:
             run_args += ["--entrypoint", entrypoint]
         return self._run(*run_args, service, *args)

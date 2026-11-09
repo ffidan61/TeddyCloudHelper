@@ -36,21 +36,34 @@ def curl_urls(runner) -> list[str]:
     return [args[-1] for args, _ in runner.calls if "curl" in args]
 
 
-def test_disable_sets_persists_and_verifies(tmp_path):
+def compose_cmds(runner) -> list[list[str]]:
+    """Compose sub-commands (without the leading ``docker compose``)."""
+    return [args[2:] for args, _ in runner.calls]
+
+
+def test_disable_edits_config_ini_with_teddycloud_stopped(tmp_path):
     compose, runner = make_compose(
         tmp_path,
-        completed(stdout="true"),
-        completed(stdout="OK"),
-        completed(stdout=""),
-        completed(stdout="false"),
+        completed(stdout="true"),  # get
+        completed(),  # stop
+        completed(),  # run (edit)
+        completed(),  # start
+        completed(stdout="false"),  # verify
     )
-    assert secmit.disable_crawler_lock(compose) is True
-    set_call = runner.calls[1][0]
-    assert set_call[set_call.index("--data-raw") + 1] == "false"
+    assert secmit.disable_crawler_lock(compose, sleep=lambda s: None) is True
+    cmds = compose_cmds(runner)
+    assert cmds[1] == ["stop", "teddycloud"]
+    run = cmds[2]
+    assert run[:6] == ["run", "--rm", "--no-deps", "--entrypoint", "sh", "teddycloud"]
+    assert run[6] == "-c"
+    script = run[7]
+    assert secmit.CONFIG_INI in script
+    assert "security_mit.onCrawler=false" in script
+    assert "sed -i" not in script  # keep inode/owner/mode of config.ini
+    assert cmds[3] == ["start", "teddycloud"]
+    # No settings/set or triggerWriteConfig — that path did not persist in prod.
     assert curl_urls(runner) == [
         "http://localhost:80/api/settings/get/security_mit.onCrawler",
-        "http://localhost:80/api/settings/set/security_mit.onCrawler",
-        "http://localhost:80/api/triggerWriteConfig",
         "http://localhost:80/api/settings/get/security_mit.onCrawler",
     ]
 
@@ -61,45 +74,60 @@ def test_disable_is_noop_when_already_off(tmp_path):
     assert len(runner.calls) == 1
 
 
-def test_disable_restarts_a_locked_instance_first(tmp_path):
-    # The lock blocks the settings API too — only a restart clears it.
+def test_disable_handles_a_locked_instance(tmp_path):
+    # The lock blocks the API, but stop/edit/start clears it anyway.
     compose, runner = make_compose(
         tmp_path,
         completed(stdout=LOCKED),
-        completed(),  # compose restart teddycloud
+        completed(),  # stop
+        completed(),  # run
+        completed(),  # start
         completed(returncode=7, stderr="connection refused"),  # still starting
-        completed(stdout="true"),
-        completed(stdout="OK"),
-        completed(),
         completed(stdout="false"),
     )
     sleeps = []
     assert secmit.disable_crawler_lock(compose, sleep=sleeps.append) is True
-    assert runner.calls[1][0] == ["docker", "compose", "restart", "teddycloud"]
+    assert compose_cmds(runner)[1] == ["stop", "teddycloud"]
     assert len(sleeps) == 1
+
+
+def test_disable_starts_teddycloud_again_when_edit_fails(tmp_path):
+    compose, runner = make_compose(
+        tmp_path,
+        completed(stdout="true"),
+        completed(),  # stop
+        completed(returncode=3, stderr="config.ini not found"),  # run
+        completed(),  # start
+    )
+    with pytest.raises(docker_cli.DockerError, match="not found"):
+        secmit.disable_crawler_lock(compose)
+    assert compose_cmds(runner)[-1] == ["start", "teddycloud"]
+
+
+def test_disable_fails_when_value_did_not_change(tmp_path):
+    compose, _ = make_compose(
+        tmp_path,
+        completed(stdout="true"), completed(), completed(), completed(),
+        completed(stdout="true"),
+    )
+    with pytest.raises(secmit.SecMitError, match="still"):
+        secmit.disable_crawler_lock(compose, sleep=lambda s: None)
 
 
 def test_disable_gives_up_when_still_locked(tmp_path):
     compose, _ = make_compose(
-        tmp_path, completed(stdout=LOCKED), completed(),
+        tmp_path, completed(stdout=LOCKED), completed(), completed(), completed(),
         *[completed(stdout=LOCKED)] * 10,
     )
     with pytest.raises(secmit.SecMitError, match="did not answer unlocked"):
         secmit.disable_crawler_lock(compose, sleep=lambda s: None, timeout=6)
 
 
-def test_disable_rejects_failed_set(tmp_path):
-    compose, _ = make_compose(
-        tmp_path, completed(stdout="true"), completed(stdout="ERROR")
-    )
-    with pytest.raises(secmit.SecMitError, match="failed"):
-        secmit.disable_crawler_lock(compose)
-
-
 def test_disable_rejects_unexpected_answer(tmp_path):
-    compose, _ = make_compose(tmp_path, completed(stdout="<html>login</html>"))
+    compose, runner = make_compose(tmp_path, completed(stdout="<html>login</html>"))
     with pytest.raises(secmit.SecMitError, match="Unexpected"):
         secmit.disable_crawler_lock(compose)
+    assert len(runner.calls) == 1  # nothing stopped
 
 
 def test_container_down_raises_docker_error(tmp_path):

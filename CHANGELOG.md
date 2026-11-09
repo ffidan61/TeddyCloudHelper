@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.22.1
+
+- Fixed: "Stop internet scanners from locking TeddyCloud" failed with
+  `Setting security_mit.onCrawler failed: ''` — TeddyCloud's settings API
+  did not accept the new value, and even where the running value changed it
+  never reached `config.ini`, so the next restart turned the lock back on.
+  The action now stops TeddyCloud for a few seconds, sets
+  `security_mit.onCrawler=false` directly in `config/config.ini` (in a
+  one-off container, so root-owned files on the host don't matter), starts
+  it again and verifies the value. This also clears an active lock.
+  TeddyCloud is started again even if the edit fails.
+
 ## v0.22.0
 
 - Fixed: TeddyCloud kept locking itself ("locked to mitigate security

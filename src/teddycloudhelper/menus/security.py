@@ -141,7 +141,8 @@ def _scanner_lock(state: AppState, project: Path) -> None:
         "Internet scanners reaching port 443 (the box port, which must stay "
         "open) lock TeddyCloud until the next restart — boxes included. "
         "nginx already protects the WebUI, so turn off TeddyCloud's crawler "
-        "detection? (A locked instance is restarted first.)",
+        "detection? (TeddyCloud is stopped for a few seconds to edit "
+        "config.ini — boxes are briefly offline.)",
         default=True,
     ):
         return
