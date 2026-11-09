@@ -170,9 +170,9 @@ class Compose:
         """Stop all services, or only ``service`` (container is kept)."""
         self._run("stop", *([service] if service is not None else []))
 
-    def start(self, service: str | None = None) -> None:
-        """Start existing (stopped) containers, or only ``service``."""
-        self._run("start", *([service] if service is not None else []))
+    def start(self, *services: str) -> None:
+        """Start existing (stopped) containers — all, or only ``services``."""
+        self._run("start", *services)
 
     def restart(self, service: str | None = None) -> None:
         """Restart all services, or only ``service``."""

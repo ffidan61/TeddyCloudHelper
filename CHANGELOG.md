@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.22.3
+
+- "Stop internet scanners from locking TeddyCloud" now restarts exactly the
+  services that were running before (not services you stopped on purpose),
+  and does so even if the action is interrupted with Ctrl-C.
+- If the services cannot be started again, the error says plainly that
+  TeddyCloud and nginx are stopped and the boxes are offline.
+- `config.ini` is backed up to `config.ini.bak` before it is edited.
+- Timeout messages now show the actual cause instead of the truncated
+  command line.
+
 ## v0.22.2
 
 - Fixed: "Stop internet scanners from locking TeddyCloud" (v0.22.1) left

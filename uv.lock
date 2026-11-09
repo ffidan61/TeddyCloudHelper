@@ -695,7 +695,7 @@ wheels = [
 
 [[package]]
 name = "teddycloudhelper"
-version = "0.22.2"
+version = "0.22.3"
 source = { editable = "." }
 dependencies = [
     { name = "bcrypt" },

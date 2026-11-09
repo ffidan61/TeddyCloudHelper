@@ -106,7 +106,8 @@ def _wait_for_setting(
             if last in ("true", "false"):
                 return last
         except docker_cli.DockerError as exc:
-            last = str(exc)  # still starting
+            # Keep the compose/curl detail, not the echoed command line.
+            last = str(exc).split(":\n", 1)[-1]  # still starting
         if clock() >= deadline:
             raise SecMitError(
                 f"TeddyCloud did not report {CRAWLER_SETTING} within "
@@ -122,13 +123,15 @@ def _edit_config_script() -> str:
     Matches the key with optional surrounding whitespace (every such line is
     replaced, duplicates included). Rewrites the file in place via ``cat >``
     instead of ``sed -i`` so it keeps its inode, owner and mode, and adds a
-    missing final newline before appending so no line gets glued on.
+    missing final newline before appending so no line gets glued on. The
+    original is kept as ``config.ini.bak`` in case the rewrite is cut short.
     """
     key = CRAWLER_SETTING.replace(".", r"\.")
     line_re = f"^[[:space:]]*{key}[[:space:]]*="
     return (
         f"f={CONFIG_INI}; "
         'test -f "$f" || { echo "$f not found - start TeddyCloud once first" >&2; exit 3; }; '
+        'cp -p "$f" "$f.bak" || exit 4; '
         f"if grep -q '{line_re}' \"$f\"; then "
         f"sed 's/{line_re}.*/{CRAWLER_SETTING}=false/' \"$f\" > /tmp/config.ini "
         '&& cat /tmp/config.ini > "$f"; '
@@ -155,24 +158,33 @@ def disable_crawler_lock(
         return False
     if answer != "true" and not is_locked(answer):
         raise SecMitError(f"Unexpected answer for {CRAWLER_SETTING}: {answer[:120]!r}")
-    # `compose stop teddycloud` also stops its dependents (nginx), so the
-    # whole project is started again afterwards, not just teddycloud.
+    # `compose stop teddycloud` also stops its dependents (nginx): remember
+    # what was running and start exactly that again — and do it whatever
+    # happens in between (Ctrl-C included), or the boxes stay cut off.
+    running = [s.service for s in compose.ps() if s.state == "running"]
     compose.stop("teddycloud")
+    edit_error: BaseException | None = None
     try:
         compose.run_service(
             "teddycloud", "-c", _edit_config_script(), entrypoint="sh", no_deps=True
         )
-    except docker_cli.DockerError as exc:
-        # Never leave the boxes cut off — and keep the edit error visible.
-        try:
-            compose.start()
-        except docker_cli.DockerError as start_exc:
-            raise SecMitError(
-                f"Editing config.ini failed: {exc}\n\nStarting the services "
-                f"again failed too: {start_exc}\nRun `docker compose up -d`."
-            ) from exc
+    except BaseException as exc:
+        edit_error = exc
         raise
-    compose.start()
+    finally:
+        try:
+            compose.start(*running)
+        except docker_cli.DockerError as start_exc:
+            cause = (
+                f"Editing config.ini failed: {edit_error}\n\n"
+                if edit_error is not None
+                else "config.ini was edited, but "
+            )
+            raise SecMitError(
+                f"{cause}starting the services again failed: {start_exc}\n"
+                "TeddyCloud and nginx are stopped — the boxes are offline. "
+                "Run `docker compose up -d`."
+            ) from (edit_error or start_exc)
     answer = _wait_for_setting(compose, sleep, clock, timeout)
     if answer != "false":
         raise SecMitError(

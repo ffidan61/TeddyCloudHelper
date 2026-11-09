@@ -29,6 +29,12 @@ def make_compose(tmp_path, *results):
     return docker_cli.Compose(tmp_path, runner=runner), runner
 
 
+PS_RUNNING = completed(
+    stdout='{"Name":"teddycloud","Service":"teddycloud","State":"running"}\n'
+    '{"Name":"nginx","Service":"nginx","State":"running"}\n'
+    '{"Name":"certbot","Service":"certbot","State":"exited"}\n'
+)
+
 LOCKED = "TeddyCloud has been locked to mitigate security risks! Please check the logs"
 
 
@@ -45,6 +51,7 @@ def test_disable_edits_config_ini_with_teddycloud_stopped(tmp_path):
     compose, runner = make_compose(
         tmp_path,
         completed(stdout="true"),  # get
+        PS_RUNNING,
         completed(),  # stop
         completed(),  # run (edit)
         completed(),  # start
@@ -52,16 +59,19 @@ def test_disable_edits_config_ini_with_teddycloud_stopped(tmp_path):
     )
     assert secmit.disable_crawler_lock(compose, sleep=lambda s: None) is True
     cmds = compose_cmds(runner)
-    assert cmds[1] == ["stop", "teddycloud"]
-    run = cmds[2]
+    assert cmds[1] == ["ps", "--all", "--format", "json"]
+    assert cmds[2] == ["stop", "teddycloud"]
+    run = cmds[3]
     assert run[:6] == ["run", "--rm", "--no-deps", "--entrypoint", "sh", "teddycloud"]
     assert run[6] == "-c"
     script = run[7]
     assert secmit.CONFIG_INI in script
     assert "security_mit.onCrawler=false" in script
     assert "sed -i" not in script  # keep inode/owner/mode of config.ini
-    # `stop teddycloud` also stops nginx (depends_on) — start the whole project.
-    assert cmds[3] == ["start"]
+    assert 'cp -p "$f" "$f.bak"' in script
+    # `stop teddycloud` also stops nginx (depends_on) — start what ran before,
+    # but not the service that was stopped on purpose.
+    assert cmds[4] == ["start", "teddycloud", "nginx"]
     # No settings/set or triggerWriteConfig — that path did not persist in prod.
     assert curl_urls(runner) == [
         "http://localhost:80/api/settings/get/security_mit.onCrawler",
@@ -95,6 +105,7 @@ def test_disable_handles_a_locked_instance(tmp_path):
     compose, runner = make_compose(
         tmp_path,
         completed(stdout=LOCKED),
+        PS_RUNNING,
         completed(),  # stop
         completed(),  # run
         completed(),  # start
@@ -103,7 +114,7 @@ def test_disable_handles_a_locked_instance(tmp_path):
     )
     clock = FakeClock()
     assert secmit.disable_crawler_lock(compose, sleep=clock.sleep, clock=clock) is True
-    assert compose_cmds(runner)[1] == ["stop", "teddycloud"]
+    assert compose_cmds(runner)[2] == ["stop", "teddycloud"]
     assert len(clock.sleeps) == 1
 
 
@@ -111,7 +122,7 @@ def test_disable_handles_a_locked_instance(tmp_path):
 def test_disable_keeps_polling_until_a_real_answer(tmp_path, not_ready):
     compose, _ = make_compose(
         tmp_path,
-        completed(stdout="true"), completed(), completed(), completed(),
+        completed(stdout="true"), PS_RUNNING, completed(), completed(), completed(),
         completed(stdout=not_ready),
         completed(stdout="false"),
     )
@@ -124,19 +135,21 @@ def test_disable_starts_services_again_when_edit_fails(tmp_path):
     compose, runner = make_compose(
         tmp_path,
         completed(stdout="true"),
+        PS_RUNNING,
         completed(),  # stop
         completed(returncode=3, stderr="config.ini not found"),  # run
         completed(),  # start
     )
     with pytest.raises(docker_cli.DockerError, match="not found"):
         secmit.disable_crawler_lock(compose)
-    assert compose_cmds(runner)[-1] == ["start"]
+    assert compose_cmds(runner)[-1] == ["start", "teddycloud", "nginx"]
 
 
 def test_disable_keeps_edit_error_when_start_fails_too(tmp_path):
     compose, _ = make_compose(
         tmp_path,
         completed(stdout="true"),
+        PS_RUNNING,
         completed(),  # stop
         completed(returncode=3, stderr="config.ini not found"),  # run
         completed(returncode=1, stderr="port is already allocated"),  # start
@@ -149,10 +162,54 @@ def test_disable_keeps_edit_error_when_start_fails_too(tmp_path):
     assert "docker compose up -d" in message
 
 
+def test_disable_starts_services_again_on_ctrl_c(tmp_path):
+    calls = []
+
+    def runner(args, cwd):
+        calls.append(args[2:])
+        if args[2] == "run":
+            raise KeyboardInterrupt
+        if args[2] == "ps":
+            return PS_RUNNING
+        return completed(stdout="true")
+
+    compose = docker_cli.Compose(tmp_path, runner=runner)
+    with pytest.raises(KeyboardInterrupt):
+        secmit.disable_crawler_lock(compose)
+    assert calls[-1] == ["start", "teddycloud", "nginx"]
+
+
+def test_disable_says_boxes_are_offline_when_start_fails(tmp_path):
+    compose, _ = make_compose(
+        tmp_path,
+        completed(stdout="true"),
+        PS_RUNNING,
+        completed(),  # stop
+        completed(),  # run (edit ok)
+        completed(returncode=1, stderr="port is already allocated"),  # start
+    )
+    with pytest.raises(secmit.SecMitError) as info:
+        secmit.disable_crawler_lock(compose)
+    message = str(info.value)
+    assert "config.ini was edited" in message
+    assert "boxes are offline" in message
+    assert "docker compose up -d" in message
+
+
+def test_timeout_message_shows_the_cause_not_the_command(tmp_path):
+    clock = FakeClock()
+    compose, _ = make_compose(
+        tmp_path, *[completed(returncode=1, stderr="service is not running")] * 5
+    )
+    with pytest.raises(secmit.SecMitError) as info:
+        secmit._wait_for_setting(compose, clock.sleep, clock, 6)
+    assert "service is not running" in str(info.value)
+
+
 def test_disable_fails_when_value_did_not_change(tmp_path):
     compose, _ = make_compose(
         tmp_path,
-        completed(stdout="true"), completed(), completed(), completed(),
+        completed(stdout="true"), PS_RUNNING, completed(), completed(), completed(),
         completed(stdout="true"),
     )
     with pytest.raises(secmit.SecMitError, match="still"):
@@ -162,7 +219,7 @@ def test_disable_fails_when_value_did_not_change(tmp_path):
 def test_disable_gives_up_after_the_timeout(tmp_path):
     clock = FakeClock()
     compose, _ = make_compose(
-        tmp_path, completed(stdout=LOCKED), completed(), completed(), completed(),
+        tmp_path, completed(stdout=LOCKED), PS_RUNNING, completed(), completed(), completed(),
         *[completed(stdout=LOCKED)] * 10,
     )
     with pytest.raises(secmit.SecMitError, match="within 6s"):
